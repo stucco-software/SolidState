@@ -9,6 +9,9 @@ hasPart:
   - post
   - get
   - get-all
+  - put
+  - patch
+  - delete
 ---
 
 Other than the initial constructor, all of SolidState's methods are asyncronous. This API documents them with the `async` and `await` pattern.

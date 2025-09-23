@@ -65,6 +65,97 @@ describe('CRUD Operations', () => {
     let all = await db.getAll()
     expect(all).toStrictEqual([chickpeas, lemon])
   })
+
+  it('Puts data to update a document', async () => {
+    await db.post({
+      "@id": "chickpeas",
+      "@type": "Ingredient",
+      "name": "Chickpeas"
+    })
+    let ref = await db.put('chickpeas', {
+      "name": "Garbanzo Beans"
+    })
+    expect(ref).toStrictEqual({
+      "@id": "chickpeas",
+      "@type": "Ingredient",
+      "name": "Garbanzo Beans"
+    })
+  })
+
+  it('Patches data to update a document', async () => {
+    await db.post({
+      "@id": "hummus",
+      "@type": "Food",
+      "name": "Hummus",
+      "vegetarian": true,
+      "number": 10,
+      "ingredient": [
+        "Garbanzo Beans",
+        "Lemon"
+      ]
+    })
+    let ref = await db.patch('hummus', {
+      "ingredient": "Olive Oil"
+    })
+    expect(ref).toStrictEqual({
+      "@id": "hummus",
+      "@type": "Food",
+      "name": "Hummus",
+      "vegetarian": true,
+      "number": 10,
+      "ingredient": [
+        "Garbanzo Beans",
+        "Lemon",
+        "Olive Oil"
+      ]
+    })
+  })
+
+  it('Deletes key/val pairs off a document', async () => {
+    await db.post({
+      "@id": "hummus",
+      "@type": "Food",
+      "name": "Hummus",
+      "vegetarian": true,
+      "number": 10,
+      "ingredient": [
+        "Garbanzo Beans",
+        "Lemon"
+      ]
+    })
+    let ref = await db.delete('hummus', {
+      "ingredient": "Olive Oil"
+    })
+    expect(ref).toStrictEqual({
+      "@id": "hummus",
+      "@type": "Food",
+      "name": "Hummus",
+      "vegetarian": true,
+      "number": 10,
+      "ingredient": [
+        "Garbanzo Beans",
+        "Lemon"
+      ]
+    })
+  })
+
+  it('Deletes an entire document', async () => {
+    await db.post({
+      "@id": "hummus",
+      "@type": "Food",
+      "name": "Hummus",
+      "vegetarian": true,
+      "number": 10,
+      "ingredient": [
+        "Garbanzo Beans",
+        "Lemon"
+      ]
+    })
+    let ref = await db.delete('hummus')
+    let noHummus = await db.get('hummus')
+    expect(ref).toBe(null)
+    expect(noHummus).toBe(null)
+  })
 })
 
 
