@@ -50,6 +50,21 @@ describe('CRUD Operations', () => {
     let chickpeas = await db.get("chickpeas")
     expect(ref).toStrictEqual(chickpeas)
   })
+
+  it('Reads all documents', async () => {
+    let chickpeas = await db.post({
+      "@id": "chickpeas",
+      "@type": "Ingredient",
+      "name": "Chickpeas"
+    })
+    let lemon = await db.post({
+      "@id": "lemon",
+      "@type": "Ingredient",
+      "name": "Lemon"
+    })
+    let all = await db.getAll()
+    expect(all).toStrictEqual([chickpeas, lemon])
+  })
 })
 
 

@@ -8,6 +8,7 @@ hasPart:
   - entities
   - post
   - get
+  - get-all
 ---
 
 Other than the initial constructor, all of SolidState's methods are asyncronous. This API documents them with the `async` and `await` pattern.

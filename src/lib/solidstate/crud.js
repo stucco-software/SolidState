@@ -35,11 +35,27 @@ export const deleteStatements = db => async (id, remove) => {
 }
 
 export const getEntity = db => async (id) => {
-  return {}
+  let doc = await db.get(id)
+  // TK: Subrepeated
+  doc['@id'] = id
+  delete doc._id
+  delete doc._rev
+  return doc
 }
 
 export const getAll = db => async () => {
-  return []
+  const results = await db.allDocs({
+    include_docs: true,
+  })
+  const docs = results
+    .rows
+    .map(row => row.doc)
+    .map(doc => {
+      delete doc._id
+      delete doc._rev
+      return doc
+    })
+  return docs
 }
 
 export const query = db => async (frame) => {

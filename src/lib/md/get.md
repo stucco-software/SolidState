@@ -3,7 +3,7 @@ title: Get Data
 type: Documentation
 ---
 
-Get a single item by `@id` with `db.get()``
+Get a single item by `@id` with `db.get()`
 
 
 #### Example
@@ -14,12 +14,12 @@ let ref = await db.post({
   "@type": "Ingredient",
   "name": "Chickpeas"
 })
-let checkpeas = await db.get("chickpeas"})
+let checkpeas = await db.get("chickpeas")
 ```
 
 ##### Returns
 
-```checkpeas
+```js
 // ref
 {
   "@id": "chickpeas",
