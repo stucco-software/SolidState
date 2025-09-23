@@ -1,0 +1,188 @@
+{
+  "@base": "https://solidstate.rdf.systems/vocabulary",
+  "@vocab": "#",
+  "skos": "https://www.w3.org/TR/skos-reference/#",
+  "xsd": "http://www.w3.org/2001/XMLSchema#",
+  "Session": "https://solidstate.rdf.systems/vocabulary#Session",
+  "View": "https://solidstate.rdf.systems/vocabulary#View",
+  "Event": "https://solidstate.rdf.systems/vocabulary#Event",
+  "Cookie": "https://solidstate.rdf.systems/vocabulary#Cookie",
+  "User": "https://solidstate.rdf.systems/vocabulary#User",
+  "Post": "https://solidstate.rdf.systems/vocabulary#Post",
+  "Documentation": "https://solidstate.rdf.systems/vocabulary#Documentation",
+  "Concept": "https://solidstate.rdf.systems/vocabulary#Concept",
+  "Domain": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#Domain",
+    "@type": "@id"
+  },
+  "domain": "https://solidstate.rdf.systems/vocabulary#domain",
+  "event": "https://solidstate.rdf.systems/vocabulary/customEvents#",
+  "id": "@id",
+  "type": "@type",
+  "browser": "https://solidstate.rdf.systems/vocabulary#browser",
+  "browserVersion": "https://solidstate.rdf.systems/vocabulary#browserVersion",
+  "os": "https://solidstate.rdf.systems/vocabulary#operatingSystem",
+  "from": "https://solidstate.rdf.systems/vocabulary#from",
+  "referrer": "https://solidstate.rdf.systems/vocabulary#referrer",
+  "url": "https://solidstate.rdf.systems/vocabulary#url",
+  "manages": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#manages",
+    "@type": "@id"
+  },
+  "managedBy": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#managedBy",
+    "@type": "@id"
+  },
+  "organizations": "http://xmlns.com/foaf/0.1/partOf",
+  "attachedTo": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#attachedTo",
+    "@type": "@id"
+  },
+  "loginTime": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#loginTime",
+    "@type": "http://www.w3.org/2001/XMLSchema#dateTime"
+  },
+  "created": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#created",
+    "@type": "http://www.w3.org/2001/XMLSchema#dateTime"
+  },
+  "expires": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#expires",
+    "@type": "http://www.w3.org/2001/XMLSchema#dateTime"
+  },
+  "source": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#source",
+    "@type": "@id"
+  },
+  "events": {
+    "@reverse": "https://solidstate.rdf.systems/vocabulary#source"
+  },
+  "viewed": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#viewed",
+    "@type": "@id"
+  },
+  "viewedPage": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#viewedPage"
+  },
+  "width": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#width",
+    "@type": "http://www.w3.org/2001/XMLSchema#integer"
+  },
+  "datetime": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#datetime",
+    "@type": "http://www.w3.org/2001/XMLSchema#dateTime"
+  },
+  "timestamp": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#timestamp",
+    "@type": "http://www.w3.org/2001/XMLSchema#integer"
+  },
+  "duration": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#duration",
+    "@type": "http://www.w3.org/2001/XMLSchema#integer"
+  },
+  "inSession": {
+    "@id": "https://solidstate.rdf.systems/vocabulary#inSession"
+  },
+  "name": {
+    "@id": "name",
+    "@type": "xsd:string"
+  },
+  "canonical": {
+    "@id": "canonical",
+    "@type": "xsd:anyURI"
+  },
+  "title": {
+    "@id": "title",
+    "@type": "xsd:string"
+  },
+  "author": {
+    "@id": "author",
+    "@type": "@id"
+  },
+  "authorOf": { "@reverse": "author" },
+  "subject": {
+    "@id": "subject",
+    "@type": "@id"
+  },
+  "subjectOf": { "@reverse": "subject" },
+  "published": {
+    "@id": "published",
+    "@type": "xsd:date"
+  },
+  "lastUpdated": {
+    "@id": "lastUpdated",
+    "@type": "xsd:date"
+  },
+  "introduces": {
+    "@id": "introduces",
+    "@type": "@id"
+  },
+  "introducedBy": { "@reverse": "introduces" },
+  "mentions": {
+    "@id": "mentions",
+    "@type": "@id"
+  },
+  "mentionedBy": { "@reverse": "mentions" },
+  "references": {
+    "@id": "refernces",
+    "@type": "@id"
+  },
+  "referencedBy": { "@reverse": "references" },
+  "abstract": {
+    "@id": "abstract",
+    "@type": "xsd:string"
+  },
+  "previous": {
+    "@id": "previous",
+    "@type": "@id"
+  },
+  "next": { "@reverse": "previous" },
+  "hasPart": {
+    "@id": "hasPart",
+    "@type": "@id"
+  },
+  "partOf": { "@reverse": "hasPart" },
+  "fragment": {
+    "@id": "fragment",
+    "@type": "xsd:anyURI"
+  },
+  "prefLabel": "skos:prefLabel",
+  "altLabel": "skos:altLabel",
+  "hiddenLabel": "skos:hiddenLabel",
+  "definition": "skos:definition",
+  "broaderThan": "skos:narrowerTransitive",
+  "narrowerThan": { "@reverse": "broaderThan" },
+  "description": {
+    "@id": "description",
+    "@type": "xsd:string"
+  },
+  "fullname": {
+    "@id": "fullname",
+    "@type": "xsd:string"
+  },
+  "rel": {
+    "@id": "rel",
+    "@type": "xsd:string"
+  },
+  "href": {
+    "@id": "href",
+    "@type": "xsd:anyURI"
+  },
+  "Project": "https://solidstate.rdf.systems/vocabulary#Project",
+  "projects": {
+    "@id": "projects",
+    "@type": "@id"
+  },
+  "secretKey": {
+    "@id": "secretKey",
+    "@type": "xsd:string"
+  },
+  "publicKey": {
+    "@id": "publicKey",
+    "@type": "xsd:string"
+  },
+  "endpoint": {
+    "@id": "endpoint",
+    "@type": "xsd:anyURI"
+  }
+}

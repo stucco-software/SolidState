@@ -1,0 +1,56 @@
+:root {
+  /* ------ */
+  /* Colors */
+
+  /* Grayscale */
+  --white: #fbfbfb;
+  --light-gray: #f0f0f0;
+  --gray: #dcdcdc;
+  --dark-gray: #b0b0b0;
+  --black: #2e2e2e;
+
+  /* Brand */
+  --pink: #e4a5bf;
+  --red: #bd6256;
+  --red: #f43b31;
+  --yellow: #fcd501;
+  --green: #548057;
+  --blue: #8cbcdf;
+
+  /* Assignment */
+  --bg-color: var(--light-gray);
+  --txt-color: var(--black);
+
+  /* Type */
+  /* Stack */
+  --serif-stack:  'Degular',  -apple-system, BlinkMacSystemFont, avenir next, avenir, segoe ui, helvetica neue, helvetica, Cantarell, Ubuntu, roboto, noto, arial, sans-serif;
+  --title-stack:  'Degular',  -apple-system, BlinkMacSystemFont, avenir next, avenir, segoe ui, helvetica neue, helvetica, Cantarell, Ubuntu, roboto, noto, arial, sans-serif;
+  --sans-stack:  'Degular', -apple-system, BlinkMacSystemFont, avenir next, avenir, segoe ui, helvetica neue, helvetica, Cantarell, Ubuntu, roboto, noto, arial, sans-serif;
+  --mono-stack: 'Departure', monspsace;
+
+  /* Scale */
+  --txt--2: clamp(0.7813rem, 0.7938rem + -0.0161vw, 0.7901rem);
+  --txt--1: clamp(0.8889rem, 0.869rem + 0.0884vw, 0.9375rem);
+  --txt-0: clamp(1rem, 0.9489rem + 0.2273vw, 1.125rem);
+  --txt-1: clamp(1.125rem, 1.033rem + 0.4091vw, 1.35rem);
+  --txt-2: clamp(1.2656rem, 1.1207rem + 0.6443vw, 1.62rem);
+  --txt-3: clamp(1.4238rem, 1.211rem + 0.9458vw, 1.944rem);
+  --txt-4: clamp(1.6018rem, 1.3028rem + 1.3291vw, 2.3328rem);
+  --txt-5: clamp(1.802rem, 1.394rem + 1.8133vw, 2.7994rem);
+
+  /* Rhythym */
+  --lead-quarter: clamp(0.25rem, 0.2283rem + 0.1087vi, 0.3125rem);
+  --lead-half: clamp(0.5rem, 0.4565rem + 0.2174vi, 0.625rem);
+  --lead-three-fourth: clamp(0.75rem, 0.6848rem + 0.3261vi, 0.9375rem);
+  --lead-1: clamp(1rem, 0.913rem + 0.4348vi, 1.25rem);
+  --lead-1-half: clamp(1.5rem, 1.3696rem + 0.6522vi, 1.875rem);
+  --lead-2: clamp(2rem, 1.8261rem + 0.8696vi, 2.5rem);
+  --lead-3: clamp(3rem, 2.7391rem + 1.3043vi, 3.75rem);
+  --lead-4: clamp(4rem, 3.6522rem + 1.7391vi, 5rem);
+  --lead-6: clamp(6rem, 5.4783rem + 2.6087vi, 7.5rem);
+
+  /* Grid */
+  --grid-max-width: 72rem;
+  --grid-gutter: var(--space-s-l, clamp(1rem, 0.4783rem + 2.6087vw, 2.5rem));
+  --grid-columns: 12;
+}

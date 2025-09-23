@@ -1,0 +1,31 @@
+@font-face {
+  font-family: 'Departure';
+  font-style: normal;
+  font-weight: normal;
+  src: url('/fonts/DepartureMono.woff2') format('woff2');
+
+/* Degular Text for Text */
+@font-face {
+  font-family: "Degular";
+  src: url("/fonts/DegularTextDemo-SemiboldItalic.otf") format("opentype");
+  font-weight: 500;
+  font-style: italic;
+}
+@font-face {
+  font-family: "Degular";
+  src: url("/fonts/DegularTextDemo-Regular.otf") format("opentype");
+  font-weight: 300;
+  font-style: normal;
+}
+@font-face {
+  font-family: "Degular";
+  src: url("/fonts/DegularTextDemo-Italic.otf") format("opentype");
+  font-weight: 300;
+  font-style: italic;
+}
+@font-face {
+  font-family: "Degular";
+  src: url("/fonts/DegularTextDemo-Semibold.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+}
