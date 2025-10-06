@@ -1,6 +1,6 @@
 import mdsvexConfig from "./mdsvex.config.js";
 import { mdsvex } from 'mdsvex';
-import adapter from '@sveltejs/adapter-vercel';
+import adapter from '@sveltejs/adapter-netlify';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
