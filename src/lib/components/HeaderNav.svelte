@@ -5,7 +5,7 @@
 <header>
   <nav>
     <a href="/">SolidState</a>
-    <a href="/">Docs</a>
+    <a href="/api">Docs</a>
   </nav>
   <CommandSearch />
 </header>

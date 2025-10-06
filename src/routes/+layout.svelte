@@ -14,18 +14,7 @@
 
 <HeaderNav />
 
-<div class="layout">
-
-<aside>
-	<SideNav sections={data.hasPart} />
-</aside>
-
-<main>
-	{@render children?.()}
-</main>
-
-</div>
-
+{@render children?.()}
 <Footer />
 
 <style>

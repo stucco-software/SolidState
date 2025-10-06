@@ -1,13 +1,12 @@
 <script>
   import { arrayify } from "$lib/helpers.js"
-  import SampleCode from "$lib/components/SampleCode.svelte"
   let { children, data } = $props()
-  console.log(data)
 </script>
 
 <div>
-  <h1>SolidState</h1>
-  {#each arrayify(data) as section}
+  <h1>API</h1>
+
+  {#each data.hasPart as section}
     <h2 id={section.id}>{section.title}</h2>
     {@html section.html}
 
