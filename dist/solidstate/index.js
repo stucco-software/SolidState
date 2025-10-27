@@ -4,7 +4,12 @@ import {
 } from './crud'
 
 const configureStore = (config) => {
-  let db = new PouchDB(config)
+  console.log(`SOLIDSTATE:----------`)
+  console.log(config)
+  console.log(`---------------------`)
+  let db = new PouchDB({
+    name: config.graph
+  })
   return db
 }
 
