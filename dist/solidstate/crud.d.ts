@@ -1,0 +1,9 @@
+export function post(db: any): (doc: any) => Promise<any>;
+export function putDoc(db: any): (doc: any) => Promise<any>;
+export function put(db: any): (id: any, update: any) => Promise<any>;
+export function patch(db: any): (id: any, update: any) => Promise<any>;
+export function deleteStatements(db: any): (id: any, remove: any) => Promise<any>;
+export function getEntity(db: any): (id: any) => Promise<any>;
+export function getAll(db: any): () => Promise<any>;
+export function query(db: any): (frame: any) => Promise<any[]>;
+export function clear(db: any): () => Promise<boolean>;
