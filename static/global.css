@@ -1,9 +1,35 @@
+@font-face {
+  font-family: "Degular";
+  src: url("/fonts/DegularTextDemo-SemiboldItalic.otf") format("opentype");
+  font-weight: 500;
+  font-style: italic;
+}
+@font-face {
+  font-family: "Degular";
+  src: url("/fonts/DegularTextDemo-Regular.otf") format("opentype");
+  font-weight: 300;
+  font-style: normal;
+}
+@font-face {
+  font-family: "Degular";
+  src: url("/fonts/DegularTextDemo-Italic.otf") format("opentype");
+  font-weight: 300;
+  font-style: italic;
+}
+@font-face {
+  font-family: "Degular";
+  src: url("/fonts/DegularTextDemo-Semibold.otf") format("opentype");
+  font-weight: 500;
+  font-style: normal;
+}
+
 html {
   font-size: 16px;
+  font-family: "Degular";
 }
 
 body {
-  font-size: var(--txt-0);
+  font-size: var(--txt-1);
   font-family: var(--sans-stack);
   line-height: 1.65;
   font-weight: 300;
@@ -17,17 +43,17 @@ b {
 h1, h2, h3, h4, h5 {
   font-family: var(--title-stack);
   margin-block: var(--lead-1);
-  font-weight: 400;
+  font-weight: 300;
   letter-spacing: 0px;
 }
 p {
   margin-block-start: 0;
   margin-block-end: var(--lead-1);
 }
-h1 { font-size: var(--txt-3); }
-h2 { font-size: var(--txt-1); }
-h3 { font-size: var(--txt-0); }
-h4 { font-size: var(--txt-0); }
+h1 { font-size: var(--txt-4); }
+h2 { font-size: var(--txt-3); }
+h3 { font-size: var(--txt-2); }
+h4 { font-size: var(--txt-1); }
 h5 { font-size: var(--txt-0); }
 
 .container {
@@ -91,6 +117,15 @@ h5 { font-size: var(--txt-0); }
   pre {
     overflow: scroll;
   }
+
+pre {
+  background-color: var(--white) !important;
+  border: 1px solid var(--gray);
+}
+
+pre {
+  box-shadow: 1px 1px 2px rgba(5, 49, 86, 0.08);
+}
 
 a:visited {
   color: var(--black);

@@ -9,14 +9,16 @@ Create a new interface to a graph by calling `SolidState(options)`.
 
 ```js
 {
-  graph: 'string'
+  graph: 'string',
+  session: {optional}
 }
 ```
 
 #### Example
 
 ```js
-import SolidState from 'SolidState'
+import SolidState from 'solidstate-kv'
+
 const db = SolidState({
   graph: 'test-graph'
 })

@@ -25,6 +25,8 @@
 <style>
   nav {
     padding-block-start: var(--lead-3);
+    position: sticky;
+    top: 0;
   }
   ul {
     margin: 0;
@@ -32,7 +34,7 @@
   }
   li {
     list-style-type: none;
-    font-weight: bold;
+    font-weight: 300;
   }
   li.subsection {
     font-weight: 400;

@@ -12,10 +12,12 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
-<HeaderNav />
+<div>
+	<HeaderNav />
 
-{@render children?.()}
-<Footer />
+	{@render children?.()}
+	<Footer />
+</div>
 
 <style>
 	.layout {

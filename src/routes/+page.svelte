@@ -6,7 +6,13 @@
 </script>
 
 <div>
-  <h1>SolidState</h1>
+  <header>
+    <h1>Solid<b>State</b></h1>
+    <p>
+      <a href="/api">Get Started</a>
+    </p>
+  </header>
+
   {#each arrayify(data) as section}
     <h2 id={section.id}>{section.title}</h2>
     {@html section.html}
@@ -19,3 +25,13 @@
     {/each}
   {/each}
 </div>
+
+<style>
+  div {
+    max-width: 46rem;
+    margin: auto;
+  }
+  header {
+    padding-block: var(--lead-6);
+  }
+</style>
