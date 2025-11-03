@@ -4,9 +4,7 @@ import {
 } from './crud'
 
 const configureStore = (config) => {
-  console.log(`SOLIDSTATE:----------`)
-  console.log(config)
-  console.log(`---------------------`)
+  console.log(":WKJBFASJF SEJ<FSBEJFESBKFBNJ<MFKBNES")
   let db = new PouchDB({
     name: config.graph
   })
