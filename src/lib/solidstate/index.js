@@ -18,6 +18,7 @@ const configureStore = (config) => {
   let db = new PouchDB({
     name: config.graph,
   })
+
   if (config.session) {
     let webid = new URL(config.session.info.webId)
     let podRoot = webid.origin
