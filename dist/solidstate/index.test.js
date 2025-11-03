@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach} from 'vitest';
 import SolidState from './'
 
-let db = SolidState('test-graph')
+let db = SolidState({
+    graph: 'test-graph'
+  })
 
 beforeEach(async () => {
   await db.clear()
-  db = SolidState('test-graph')
+  db = SolidState({
+    graph: 'test-graph'
+  })
 })
 
 describe('lets test solidstate!', () => {
