@@ -1,5 +1,9 @@
 import jsonld from "jsonld"
 
+import {
+  seperate
+} from './utils'
+
 export const context = {
   "@base": "https://solidstate.rdf.systems/",
   "@vocab": "",

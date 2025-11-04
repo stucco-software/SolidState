@@ -5,10 +5,6 @@ import {
 } from './crud'
 
 import {
-  seperate
-} from './utils'
-
-import {
   createGraph,
   updateGraph,
   getGraph
