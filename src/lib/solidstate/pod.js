@@ -47,6 +47,15 @@ export const updateGraph = async ({url, userFetch, body = []}) => {
   return response
 }
 
+const getLatestRev = (revs) => {
+  let sorted = revs.sort((a,b) => {
+    let na = Number.parseInt(a['@id'].split(`-`) )
+    let nb = Number.parseInt(b['@id'].split(`-`) )
+    return nb - na
+  })
+  return sorted[0]
+}
+
 export const getGraph = async ({userFetch, graph, db}) => {
   // let DEL = await userFetch(graph, {
   //   method: 'DELETE'
@@ -93,15 +102,22 @@ export const getGraph = async ({userFetch, graph, db}) => {
   let realNodes = nodes
     .filter(node => node._rev)
     .map(node => {
-      let rev_id = node._rev['@id']
-      delete node._rev['@id']
-      let rev = node._rev
+
+      let rev = getLatestRev(arrayify(node._rev))
+      let rev_id = rev['@id']
       delete node._rev
-      return {
+      let returnNode = {
         ...node,
         ...rev,
         _rev: rev_id,
         _id: node['@id']
+      }
+      return {
+        ...node,
+        ...rev,
+        _rev: rev_id,
+        _id: node['@id'],
+        '@id': node['@id']
       }
     })
   return realNodes
