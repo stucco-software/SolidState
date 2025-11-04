@@ -5,6 +5,7 @@ lastUpdated: 2025.09.22
 order: 1
 hasPart:
   - create-a-store
+  - user-provided-store
   - entities
   - post
   - get
