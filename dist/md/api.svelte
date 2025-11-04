@@ -1,5 +1,5 @@
 <script context="module">
-	export const metadata = {"title":"API","type":"Collection","lastUpdated":"2025.09.22","order":1,"hasPart":["create-a-store","entities","post","get","get-all","put","patch","delete"]};
+	export const metadata = {"title":"API","type":"Collection","lastUpdated":"2025.09.22","order":1,"hasPart":["create-a-store","user-provided-store","entities","post","get","get-all","put","patch","delete"]};
 	const { title, type, lastUpdated, order, hasPart } = metadata;
 </script>
 

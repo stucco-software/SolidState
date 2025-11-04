@@ -5,9 +5,13 @@
 <header>
   <nav>
     <a href="/">SolidState</a>
-    <a href="/api">Docs</a>
   </nav>
-  <CommandSearch />
+  <nav>
+    <a href="/api">API Reference</a>
+    <a href="#">Github</a>
+  </nav>
+
+  <!-- <CommandSearch /> -->
 </header>
 
 <style>
