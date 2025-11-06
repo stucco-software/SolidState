@@ -1,7 +1,8 @@
 import jsonld from "jsonld"
 
 import {
-  seperate
+  seperate,
+  arrayify
 } from './utils'
 
 export const context = {
