@@ -7,7 +7,8 @@ import {
 import {
   createGraph,
   updateGraph,
-  getGraph
+  getGraph,
+  addToPouch
 } from './pod'
 
 const configureStore = (config) => {
@@ -16,6 +17,7 @@ const configureStore = (config) => {
   })
 
   if (config.session) {
+
     // connect to pod
     let webid = new URL(config.session.info.webId)
     let podRoot = webid.origin

@@ -1,27 +1,9 @@
 import jsonld from "jsonld"
 
 import {
-  seperate,
   arrayify
 } from './utils'
 
-
-export const connectPod = (db, config) => {
-  const resource = getResourceURL(config)
-
-  // get data from the resource url
-
-    // turn that data into json
-
-  // stuff json into db
-
-  // set changes listener
-
-    // on change,
-    // update graph
-
-  // return changes listener
-}
 
 export const getResourceURL = config => {
   let webid = new URL(config.session.info.webId)
@@ -31,29 +13,17 @@ export const getResourceURL = config => {
   return pod
 }
 
-export const graphMetaURL = (graph) => {
-  let url = new URL(graph)
-  let path = `${url.origin}${url.pathname}.solidstate.meta`
-  return path
-}
-
 export const context = {
   "@base": "https://solidstate.rdf.systems/",
-  "@vocab": "",
-  "_rev": {
-    "@type": "@id",
-    "@id": "_rev"
-  },
-  "_id": {
-    "@reverse": "_rev"
-  }
+  "@vocab": ""
 }
 
 export const createGraph = async ({url, userFetch, body = []}) => {
   const nquads = await jsonld.toRDF({
     "@context": context,
-    "@graph": seperate(body)
+    "@graph": body
   }, {format: 'application/n-quads'});
+
   const response = await userFetch(url, {
     method: "PUT",
     headers: {
@@ -64,30 +34,21 @@ export const createGraph = async ({url, userFetch, body = []}) => {
   return response
 }
 
-export const updateGraph = async ({url, userFetch, body = []}) => {
-  const meta = createGraph()
+export const updateGraph = async ({url, userFetch, body = {}}) => {
   const nquads = await jsonld.toRDF({
     "@context": context,
-    "@graph": seperate([body])
+    "@graph": [body]
   }, {format: 'application/n-quads'});
 
-  const response = await userFetch(url, {
+  const response = await userFetch(graphURL(url), {
     method: "PATCH",
     headers: {
       "Content-Type": "application/sparql-update",
     },
-    body: `insert data {${nquads}}`
+    body: `delete {<${body['@id']}> ?p ?o } insert {${nquads}} where { ?s ?p ?o }`
   })
-  return response
-}
 
-const getLatestRev = (revs) => {
-  let sorted = revs.sort((a,b) => {
-    let na = Number.parseInt(a['@id'].split(`-`) )
-    let nb = Number.parseInt(b['@id'].split(`-`) )
-    return nb - na
-  })
-  return sorted[0]
+  return response
 }
 
 export const getNodeArray = ld => {
@@ -164,7 +125,6 @@ export const getGraph = async ({userFetch, graph, db}) => {
   // and node versions are stored elsewhere
   // if at all
   let nodes = transformQuads(nquads)
-  let realNodes = nodes
 
   return nodes
 }
