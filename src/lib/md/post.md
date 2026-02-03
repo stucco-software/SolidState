@@ -34,7 +34,8 @@ let ref = await db.post({
     "Garbanzo Beans",
     "Lemon"
   ],
-  "@id": "uuid:5974d4a4-4b44-4c2d-a9f5-fbccc8da2760"
+  "@id": "uuid:5974d4a4-4b44-4c2d-a9f5-fbccc8da2760",
+  "_rev": "1-<id>"
 }
 
 ```

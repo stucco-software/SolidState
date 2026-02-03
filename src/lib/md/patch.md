@@ -34,6 +34,7 @@ let ref = await db.patch('hummus', {
 {
   "@id": "hummus",
   "@type": "Food",
+  "_rev": "<version>-<id>"
   "name": "Hummus",
   "vegetarian": true,
   "number": 10,

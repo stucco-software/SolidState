@@ -21,6 +21,7 @@ let ref = await db.put("chickpeas", {
 {
   "@id": "chickpeas",
   "@type": "Ingredient",
+  "_rev": "<version>-<id>"
   "name": "Garbanzo Beans"
 }
 ```

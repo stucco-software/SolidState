@@ -19,10 +19,12 @@ let items = await db.getAll()
 [{
   "@id": "chickpeas",
   "@type": "Ingredient",
+  "_rev": "<version>-<id>"
   "name": "Chickpeas"
 },{
   "@id": "lemon",
   "@type": "Ingredient",
+  "_rev": "<version>-<id>"
   "name": "Lemon"
 }]
 ```

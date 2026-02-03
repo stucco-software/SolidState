@@ -16,6 +16,7 @@ const configureStore = (config) => {
   })
 
   if (config.session) {
+    // connect to pod
     let webid = new URL(config.session.info.webId)
     let podRoot = webid.origin
     let pod = `${podRoot}/${config.graph}`
@@ -25,10 +26,12 @@ const configureStore = (config) => {
       graph: pod,
       db,
     }).then(async graph => {
+      // add docs to pouch
       let newEdits = graph.filter(node => !node._rev)
       let oldEdits = graph.filter(node => node._rev)
       await db.bulkDocs(newEdits, {new_edits: true})
       await db.bulkDocs(oldEdits, {new_edits: false})
+
       const changes = db.changes({
         since: 'now',
         live: true,
@@ -52,6 +55,8 @@ const SolidState = (config) => {
     config: config,
     changes: db.changes,
     _changes: db._changes,
+    _bulkDocs: db.bulkDocs,
+    _allDocs: db.allDocs,
     once: db.once,
     on: db.on,
     taskqueue: db.taskqueue,

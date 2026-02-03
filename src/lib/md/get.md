@@ -24,6 +24,7 @@ let checkpeas = await db.get("chickpeas")
 {
   "@id": "chickpeas",
   "@type": "Ingredient",
+  "_rev": "<version>-<id>"
   "name": "Chickpeas"
 }
 ```
