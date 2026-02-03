@@ -5,6 +5,12 @@ import {
   arrayify
 } from './utils'
 
+export const graphMetaURL = (graph) => {
+  let url = new URL(graph)
+  let path = `${url.origin}${url.pathname}.solidstate.meta`
+  return path
+}
+
 export const context = {
   "@base": "https://solidstate.rdf.systems/",
   "@vocab": "",
@@ -33,6 +39,7 @@ export const createGraph = async ({url, userFetch, body = []}) => {
 }
 
 export const updateGraph = async ({url, userFetch, body = []}) => {
+  const meta = createGraph()
   const nquads = await jsonld.toRDF({
     "@context": context,
     "@graph": seperate([body])
@@ -79,7 +86,7 @@ export const getGraph = async ({userFetch, graph, db}) => {
   let response = await userFetch(graph, {
     method: 'GET',
     headers: {
-      "Content-Type": "application/n-quads",
+      "accept": "application/n-quads",
     },
   })
   let nquads = await response.text()
@@ -100,10 +107,10 @@ export const getGraph = async ({userFetch, graph, db}) => {
   } else {
     nodes = [docs]
   }
+
   let realNodes = nodes
     .filter(node => node._rev)
     .map(node => {
-
       let rev = getLatestRev(arrayify(node._rev))
       let rev_id = rev['@id']
       delete node._rev
