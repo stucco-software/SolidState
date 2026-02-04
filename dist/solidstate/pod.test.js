@@ -1,4 +1,4 @@
-import SolidState, {configureStore} from '$lib/solidstate'
+import SolidState, {configureStore} from './'
 
 import { describe, it, expect, beforeEach} from 'vitest'
 import {

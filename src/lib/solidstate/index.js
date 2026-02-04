@@ -5,45 +5,55 @@ import {
 } from './crud'
 
 import {
+  getResourceURL,
+  checkGraph,
   createGraph,
   updateGraph,
   getGraph,
   addToPouch
 } from './pod'
 
-const configureStore = (config) => {
+export const configureStore = (config) => {
   let db = new PouchDB({
     name: config.graph,
   })
 
   if (config.session) {
-
     // connect to pod
-    let webid = new URL(config.session.info.webId)
-    let podRoot = webid.origin
-    let pod = `${podRoot}/${config.graph}`
+    let pod = getResourceURL(config)
+    checkGraph({userFetch: config.session.fetch, graph: pod})
+      .then(graphExists => {
+        if (!graphExists) {
+          const fn = getAll(db)
+          return fn()
+        }
+      })
+      .then(body => {
+        return createGraph({
+          userFetch: config.session.fetch,
+          url: pod,
+          body
+        })
+      })
 
+    // sync pod down to graph
     let podGraph = getGraph({
       userFetch: config.session.fetch,
-      graph: pod,
-      db,
-    }).then(async graph => {
-      // add docs to pouch
-      let newEdits = graph.filter(node => !node._rev)
-      let oldEdits = graph.filter(node => node._rev)
-      await db.bulkDocs(newEdits, {new_edits: true})
-      await db.bulkDocs(oldEdits, {new_edits: false})
+      graph: pod
+    }).then(async docs => {
+      await addToPouch({docs, db})
+    })
 
-      const changes = db.changes({
-        since: 'now',
-        live: true,
-        include_docs: true
-      }).on('change', change => {
-        updateGraph({
-          url: pod,
-          userFetch: config.session.fetch,
-          body: change.doc
-        })
+
+    const changes = db.changes({
+      since: 'now',
+      live: true,
+      include_docs: true
+    }).on('change', change => {
+      updateGraph({
+        url: pod,
+        userFetch: config.session.fetch,
+        body: change.doc
       })
     })
   }

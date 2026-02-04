@@ -26,6 +26,7 @@
 <span class="token punctuation">&#123;</span>
   <span class="token string">"@id"</span><span class="token operator">:</span> <span class="token string">"hummus"</span><span class="token punctuation">,</span>
   <span class="token string">"@type"</span><span class="token operator">:</span> <span class="token string">"Food"</span><span class="token punctuation">,</span>
+  <span class="token string">"_rev"</span><span class="token operator">:</span> <span class="token string">"&lt;version>-&lt;id>"</span>
   <span class="token string">"name"</span><span class="token operator">:</span> <span class="token string">"Hummus"</span><span class="token punctuation">,</span>
   <span class="token string">"vegetarian"</span><span class="token operator">:</span> <span class="token boolean">true</span><span class="token punctuation">,</span>
   <span class="token string">"number"</span><span class="token operator">:</span> <span class="token number">10</span><span class="token punctuation">,</span>

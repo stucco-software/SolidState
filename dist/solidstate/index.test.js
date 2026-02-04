@@ -80,9 +80,10 @@ describe('CRUD Operations', () => {
       "name": "Garbanzo Beans"
     })
     expect(ref).toStrictEqual({
+      "_rev": "1-80ff1918da0971caf909e7186e0b2b2d",
       "@id": "chickpeas",
       "@type": "Ingredient",
-      "name": "Garbanzo Beans"
+      "name": "Garbanzo Beans",
     })
   })
 
@@ -102,6 +103,7 @@ describe('CRUD Operations', () => {
       "ingredient": "Olive Oil"
     })
     expect(ref).toStrictEqual({
+      "_rev": "1-2524e40df5dce08d5d45f13698ddf1d2",
       "@id": "hummus",
       "@type": "Food",
       "name": "Hummus",
@@ -131,6 +133,7 @@ describe('CRUD Operations', () => {
       "ingredient": "Olive Oil"
     })
     expect(ref).toStrictEqual({
+      "_rev": "1-2524e40df5dce08d5d45f13698ddf1d2",
       "@id": "hummus",
       "@type": "Food",
       "name": "Hummus",

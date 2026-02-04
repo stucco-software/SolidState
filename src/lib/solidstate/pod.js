@@ -1,6 +1,10 @@
 import jsonld from "jsonld"
 
 import {
+  getAll
+} from './crud'
+
+import {
   arrayify
 } from './utils'
 
@@ -19,10 +23,15 @@ export const context = {
 }
 
 export const createGraph = async ({url, userFetch, body = []}) => {
-  const nquads = await jsonld.toRDF({
-    "@context": context,
-    "@graph": body
-  }, {format: 'application/n-quads'});
+  let nquads
+  if (body.length < 1) {
+    nquads = `<#> <https://solidstate.rdf.systems/createdBy> <SolidState> .`
+  } else {
+    nquads = await jsonld.toRDF({
+      "@context": context,
+      "@graph": body
+    }, {format: 'application/n-quads'});
+  }
 
   const response = await userFetch(url, {
     method: "PUT",
@@ -35,12 +44,13 @@ export const createGraph = async ({url, userFetch, body = []}) => {
 }
 
 export const updateGraph = async ({url, userFetch, body = {}}) => {
+  console.log('update??', url)
   const nquads = await jsonld.toRDF({
     "@context": context,
     "@graph": [body]
   }, {format: 'application/n-quads'});
 
-  const response = await userFetch(graphURL(url), {
+  const response = await userFetch(url, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/sparql-update",
@@ -63,7 +73,7 @@ export const getNodeArray = ld => {
   return nodes
 }
 
-export const transformQuads = async nquads => {
+export const transformQuads = async (nquads = '') => {
   if (nquads.length < 1) {
     return []
   }
@@ -75,6 +85,11 @@ export const transformQuads = async nquads => {
 
 export const addToPouch = async ({docs, db}) => {
     // add docs to pouch
+
+  if (docs.length < 1) {
+    return
+  }
+
   let id_docs = docs.map(node => {
     node._id = node['@id']
     return node
@@ -87,8 +102,7 @@ export const addToPouch = async ({docs, db}) => {
 
 }
 
-export const getGraph = async ({userFetch, graph, db}) => {
-
+export const checkGraph = async ({userFetch, graph}) => {
   // check if resource exists
   let head = await userFetch(graph, {
     method: 'HEAD'
@@ -96,35 +110,21 @@ export const getGraph = async ({userFetch, graph, db}) => {
 
   // if resource doesnt exist,
   if (head.status === 404) {
-    // grab current local docs
-    let alldocs = await db.allDocs({
-      include_docs: true
-    })
-    const docs = alldocs.rows.map(row => row.doc)
-
-    // create graph with them
-    let didCreateGraph = await createGraph({
-      url: graph,
-      userFetch: userFetch,
-      body: docs
-    })
+    return false
+  } else {
+    return true
   }
+}
 
-  // now get the graph
+export const getGraph = async ({userFetch, graph}) => {
   let response = await userFetch(graph, {
     method: 'GET',
     headers: {
       "accept": "application/n-quads",
     },
   })
-
   // now get the quads
   let nquads = await response.text()
-
-  // lets assume these _are_ real nodes
-  // and node versions are stored elsewhere
-  // if at all
   let nodes = transformQuads(nquads)
-
   return nodes
 }

@@ -5,40 +5,55 @@ import {
 } from './crud'
 
 import {
+  getResourceURL,
+  checkGraph,
   createGraph,
   updateGraph,
-  getGraph
+  getGraph,
+  addToPouch
 } from './pod'
 
-const configureStore = (config) => {
+export const configureStore = (config) => {
   let db = new PouchDB({
     name: config.graph,
   })
 
   if (config.session) {
-    let webid = new URL(config.session.info.webId)
-    let podRoot = webid.origin
-    let pod = `${podRoot}/${config.graph}`
+    // connect to pod
+    let pod = getResourceURL(config)
+    checkGraph({userFetch: config.session.fetch, graph: pod})
+      .then(graphExists => {
+        if (!graphExists) {
+          const fn = getAll(db)
+          return fn()
+        }
+      })
+      .then(body => {
+        return createGraph({
+          userFetch: config.session.fetch,
+          url: pod,
+          body
+        })
+      })
 
+    // sync pod down to graph
     let podGraph = getGraph({
       userFetch: config.session.fetch,
-      graph: pod,
-      db,
-    }).then(async graph => {
-      let newEdits = graph.filter(node => !node._rev)
-      let oldEdits = graph.filter(node => node._rev)
-      await db.bulkDocs(newEdits, {new_edits: true})
-      await db.bulkDocs(oldEdits, {new_edits: false})
-      const changes = db.changes({
-        since: 'now',
-        live: true,
-        include_docs: true
-      }).on('change', change => {
-        updateGraph({
-          url: pod,
-          userFetch: config.session.fetch,
-          body: change.doc
-        })
+      graph: pod
+    }).then(async docs => {
+      await addToPouch({docs, db})
+    })
+
+
+    const changes = db.changes({
+      since: 'now',
+      live: true,
+      include_docs: true
+    }).on('change', change => {
+      updateGraph({
+        url: pod,
+        userFetch: config.session.fetch,
+        body: change.doc
       })
     })
   }
@@ -52,6 +67,8 @@ const SolidState = (config) => {
     config: config,
     changes: db.changes,
     _changes: db._changes,
+    _bulkDocs: db.bulkDocs,
+    _allDocs: db.allDocs,
     once: db.once,
     on: db.on,
     taskqueue: db.taskqueue,

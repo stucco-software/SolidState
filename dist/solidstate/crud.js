@@ -11,6 +11,7 @@ export const post = db => async (doc) => {
   let ref = await db.post(doc)
   delete doc._id
   doc['@id'] = ref.id
+  doc._rev = ref.rev
   return doc
 }
 
@@ -18,7 +19,6 @@ export const putDoc = db => async (doc) => {
   let ref = await db.put(doc)
   doc['@id'] = ref.id
   delete doc._id
-  delete doc._rev
   return doc
 }
 
@@ -59,29 +59,31 @@ export const deleteStatements = db => async (id, remove) => {
 export const getEntity = db => async (id) => {
   try {
     let doc = await db.get(id)
-    // TK: Subrepeated
     doc['@id'] = id
     delete doc._id
-    delete doc._rev
     return doc
   } catch (e) {
     return null
   }
 }
 
-export const getAll = db => async () => {
-  const results = await db.allDocs({
-    include_docs: true,
-  })
-  const docs = results
+export const docs2nodes = (docs) => {
+  const nodes = docs
     .rows
     .map(row => row.doc)
     .map(doc => {
       delete doc._id
-      delete doc._rev
       return doc
     })
-  return docs
+  return nodes
+}
+
+export const getAll = db => async () => {
+  const docs = await db.allDocs({
+    include_docs: true,
+  })
+  const nodes = docs2nodes(docs)
+  return nodes
 }
 
 export const query = db => async (frame) => {

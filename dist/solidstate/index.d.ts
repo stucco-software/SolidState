@@ -1,9 +1,12 @@
+export function configureStore(config: any): any;
 export default SolidState;
 declare function SolidState(config: any): {
     version: string;
     config: any;
     changes: any;
     _changes: any;
+    _bulkDocs: any;
+    _allDocs: any;
     once: any;
     on: any;
     taskqueue: any;

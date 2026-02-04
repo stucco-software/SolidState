@@ -26,6 +26,7 @@
     <span class="token string">"Garbanzo Beans"</span><span class="token punctuation">,</span>
     <span class="token string">"Lemon"</span>
   <span class="token punctuation">]</span><span class="token punctuation">,</span>
-  <span class="token string">"@id"</span><span class="token operator">:</span> <span class="token string">"uuid:5974d4a4-4b44-4c2d-a9f5-fbccc8da2760"</span>
+  <span class="token string">"@id"</span><span class="token operator">:</span> <span class="token string">"uuid:5974d4a4-4b44-4c2d-a9f5-fbccc8da2760"</span><span class="token punctuation">,</span>
+  <span class="token string">"_rev"</span><span class="token operator">:</span> <span class="token string">"1-&lt;id>"</span>
 <span class="token punctuation">&#125;</span>
 </code>`}</pre>

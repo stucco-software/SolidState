@@ -1,13 +1,7 @@
+export function getResourceURL(config: any): string;
 export const context: {
     "@base": string;
     "@vocab": string;
-    _rev: {
-        "@type": string;
-        "@id": string;
-    };
-    _id: {
-        "@reverse": string;
-    };
 };
 export function createGraph({ url, userFetch, body }: {
     url: any;
@@ -17,10 +11,19 @@ export function createGraph({ url, userFetch, body }: {
 export function updateGraph({ url, userFetch, body }: {
     url: any;
     userFetch: any;
-    body?: any[];
+    body?: {};
 }): Promise<any>;
-export function getGraph({ userFetch, graph, db }: {
+export function getNodeArray(ld: any): any;
+export function transformQuads(nquads?: string): Promise<any>;
+export function addToPouch({ docs, db }: {
+    docs: any;
+    db: any;
+}): Promise<void>;
+export function checkGraph({ userFetch, graph }: {
     userFetch: any;
     graph: any;
-    db: any;
+}): Promise<boolean>;
+export function getGraph({ userFetch, graph }: {
+    userFetch: any;
+    graph: any;
 }): Promise<any>;

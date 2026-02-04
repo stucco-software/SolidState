@@ -13,5 +13,6 @@
 <pre class="language-js">{@html `<code class="language-js"><span class="token punctuation">&#123;</span>
   <span class="token string">"@id"</span><span class="token operator">:</span> <span class="token string">"chickpeas"</span><span class="token punctuation">,</span>
   <span class="token string">"@type"</span><span class="token operator">:</span> <span class="token string">"Ingredient"</span><span class="token punctuation">,</span>
+  <span class="token string">"_rev"</span><span class="token operator">:</span> <span class="token string">"&lt;version>-&lt;id>"</span>
   <span class="token string">"name"</span><span class="token operator">:</span> <span class="token string">"Garbanzo Beans"</span>
 <span class="token punctuation">&#125;</span></code>`}</pre>

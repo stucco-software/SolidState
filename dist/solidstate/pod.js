@@ -1,27 +1,38 @@
 import jsonld from "jsonld"
 
 import {
-  seperate,
+  getAll
+} from './crud'
+
+import {
   arrayify
 } from './utils'
 
+
+export const getResourceURL = config => {
+  let webid = new URL(config.session.info.webId)
+  // @TK make this get path roots too
+  let podRoot = webid.origin
+  let pod = `${podRoot}/${config.graph}`
+  return pod
+}
+
 export const context = {
   "@base": "https://solidstate.rdf.systems/",
-  "@vocab": "",
-  "_rev": {
-    "@type": "@id",
-    "@id": "_rev"
-  },
-  "_id": {
-    "@reverse": "_rev"
-  }
+  "@vocab": ""
 }
 
 export const createGraph = async ({url, userFetch, body = []}) => {
-  const nquads = await jsonld.toRDF({
-    "@context": context,
-    "@graph": seperate(body)
-  }, {format: 'application/n-quads'});
+  let nquads
+  if (body.length < 1) {
+    nquads = `<#> <https://solidstate.rdf.systems/createdBy> <SolidState> .`
+  } else {
+    nquads = await jsonld.toRDF({
+      "@context": context,
+      "@graph": body
+    }, {format: 'application/n-quads'});
+  }
+
   const response = await userFetch(url, {
     method: "PUT",
     headers: {
@@ -32,10 +43,11 @@ export const createGraph = async ({url, userFetch, body = []}) => {
   return response
 }
 
-export const updateGraph = async ({url, userFetch, body = []}) => {
+export const updateGraph = async ({url, userFetch, body = {}}) => {
+  console.log('update??', url)
   const nquads = await jsonld.toRDF({
     "@context": context,
-    "@graph": seperate([body])
+    "@graph": [body]
   }, {format: 'application/n-quads'});
 
   const response = await userFetch(url, {
@@ -43,83 +55,76 @@ export const updateGraph = async ({url, userFetch, body = []}) => {
     headers: {
       "Content-Type": "application/sparql-update",
     },
-    body: `insert data {${nquads}}`
+    body: `delete {<${body['@id']}> ?p ?o } insert {${nquads}} where { ?s ?p ?o }`
   })
+
   return response
 }
 
-const getLatestRev = (revs) => {
-  let sorted = revs.sort((a,b) => {
-    let na = Number.parseInt(a['@id'].split(`-`) )
-    let nb = Number.parseInt(b['@id'].split(`-`) )
-    return nb - na
-  })
-  return sorted[0]
+export const getNodeArray = ld => {
+  let nodes
+  if (ld['@graph']) {
+    nodes = ld['@graph']
+  } else {
+    const { ...node } = ld
+    delete node['@context']
+    nodes = [node]
+  }
+  return nodes
 }
 
-export const getGraph = async ({userFetch, graph, db}) => {
-  // let DEL = await userFetch(graph, {
-  //   method: 'DELETE'
-  // })
-  let head = await userFetch(graph, {
-    method: 'HEAD'
-  })
-  if (head.status === 404) {
-    let alldocs = await db.allDocs({
-      include_docs: true
-    })
-    const docs = alldocs.rows.map(row => row.doc)
-
-    let didCreateGraph = await createGraph({
-      url: graph,
-      userFetch: userFetch,
-      body: docs
-    })
-  }
-  let response = await userFetch(graph, {
-    method: 'GET',
-    headers: {
-      "Content-Type": "application/n-quads",
-    },
-  })
-  let nquads = await response.text()
+export const transformQuads = async (nquads = '') => {
   if (nquads.length < 1) {
     return []
   }
   let doc = await jsonld.fromRDF(nquads, {format: 'application/n-quads'})
   let json = await jsonld.compact(doc, context)
-  let docs = await jsonld.frame(json, {
-    "@context": context,
-    "@id": {},
-    "_rev": {}
-  })
-  delete docs["@context"]
-  let nodes
-  if (docs['@graph']) {
-    nodes = docs['@graph']
-  } else {
-    nodes = [docs]
-  }
-  let realNodes = nodes
-    .filter(node => node._rev)
-    .map(node => {
+  const nodes = getNodeArray(json)
+  return nodes
+}
 
-      let rev = getLatestRev(arrayify(node._rev))
-      let rev_id = rev['@id']
-      delete node._rev
-      let returnNode = {
-        ...node,
-        ...rev,
-        _rev: rev_id,
-        _id: node['@id']
-      }
-      return {
-        ...node,
-        ...rev,
-        _rev: rev_id,
-        _id: node['@id'],
-        '@id': node['@id']
-      }
-    })
-  return realNodes
+export const addToPouch = async ({docs, db}) => {
+    // add docs to pouch
+
+  if (docs.length < 1) {
+    return
+  }
+
+  let id_docs = docs.map(node => {
+    node._id = node['@id']
+    return node
+  })
+  let newEdits = id_docs.filter(node => !node._rev)
+  let oldEdits = id_docs.filter(node => node._rev)
+
+  await db._bulkDocs(newEdits, {new_edits: true})
+  await db._bulkDocs(oldEdits, {new_edits: false})
+
+}
+
+export const checkGraph = async ({userFetch, graph}) => {
+  // check if resource exists
+  let head = await userFetch(graph, {
+    method: 'HEAD'
+  })
+
+  // if resource doesnt exist,
+  if (head.status === 404) {
+    return false
+  } else {
+    return true
+  }
+}
+
+export const getGraph = async ({userFetch, graph}) => {
+  let response = await userFetch(graph, {
+    method: 'GET',
+    headers: {
+      "accept": "application/n-quads",
+    },
+  })
+  // now get the quads
+  let nquads = await response.text()
+  let nodes = transformQuads(nquads)
+  return nodes
 }
