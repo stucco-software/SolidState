@@ -27,22 +27,24 @@ export const configureStore = (config) => {
           const fn = getAll(db)
           return fn()
         }
+        return null
       })
       .then(body => {
-        return createGraph({
+        if (body) {
+          return createGraph({
+            userFetch: config.session.fetch,
+            url: pod,
+            body
+          })
+        }
+      }).then(result => {
+        let podGraph = getGraph({
           userFetch: config.session.fetch,
-          url: pod,
-          body
+          graph: pod
+        }).then(async docs => {
+          await addToPouch({docs, db})
         })
       })
-
-    // sync pod down to graph
-    let podGraph = getGraph({
-      userFetch: config.session.fetch,
-      graph: pod
-    }).then(async docs => {
-      await addToPouch({docs, db})
-    })
 
 
     const changes = db.changes({
