@@ -181,6 +181,58 @@ describe('lets test different json to pouch use cases', async () => {
       }])
   })
 
+  it.only('stuffs a complex profile doc into an empty graph', async () => {
+    const docs =[
+      {
+        "@id": "https://nikolas.login.stucco.software/profile/card",
+        "@type": "http://xmlns.com/foaf/0.1/PersonalProfileDocument",
+        "http://xmlns.com/foaf/0.1/maker": {
+          "@id": "https://nikolas.login.stucco.software/profile/card#me"
+        },
+        "http://xmlns.com/foaf/0.1/primaryTopic": {
+          "@id": "https://nikolas.login.stucco.software/profile/card#me"
+        },
+        "_id": "https://nikolas.login.stucco.software/profile/card"
+      },
+      {
+        "@id": "https://nikolas.login.stucco.software/profile/card#me",
+        "@type": "http://xmlns.com/foaf/0.1/Person",
+        "http://www.w3.org/ns/solid/terms#oidcIssuer": {
+          "@id": "https://login.stucco.software/"
+        },
+        "_id": "https://nikolas.login.stucco.software/profile/card#me"
+      }
+    ]
+
+    const docswRev =[
+      {
+        "@id": "https://nikolas.login.stucco.software/profile/card",
+        "@type": "http://xmlns.com/foaf/0.1/PersonalProfileDocument",
+        "_rev": "1-4f54de050f6ae87bfb52dff0aef0122b",
+        "http://xmlns.com/foaf/0.1/maker": {
+          "@id": "https://nikolas.login.stucco.software/profile/card#me"
+        },
+        "http://xmlns.com/foaf/0.1/primaryTopic": {
+          "@id": "https://nikolas.login.stucco.software/profile/card#me"
+        },
+      },
+      {
+        "@id": "https://nikolas.login.stucco.software/profile/card#me",
+         "_rev": "1-717941cfb7230f4b234788318ebd7246",
+        "@type": "http://xmlns.com/foaf/0.1/Person",
+        "http://www.w3.org/ns/solid/terms#oidcIssuer": {
+          "@id": "https://login.stucco.software/"
+        },
+      }
+    ]
+
+    await addToPouch({docs, db})
+    const allDocs = await db.getAll()
+
+    expect(allDocs)
+      .toStrictEqual(docswRev)
+  })
+
   it('has an object in the pouch, but pod has no rev: pouch wins', async () => {
     const doc = {
       "@id": "urn:uuid:0x01",

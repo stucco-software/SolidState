@@ -44,7 +44,6 @@ export const createGraph = async ({url, userFetch, body = []}) => {
 }
 
 export const updateGraph = async ({url, userFetch, body = {}}) => {
-  console.log('update??', url)
   const nquads = await jsonld.toRDF({
     "@context": context,
     "@graph": [body]
@@ -97,8 +96,20 @@ export const addToPouch = async ({docs, db}) => {
   let newEdits = id_docs.filter(node => !node._rev)
   let oldEdits = id_docs.filter(node => node._rev)
 
-  await db._bulkDocs(newEdits, {new_edits: true})
-  await db._bulkDocs(oldEdits, {new_edits: false})
+  try {
+    let ref = await db.bulkDocs(newEdits, {new_edits: true})
+  } catch (e) {
+    let ref = await db._bulkDocs(newEdits, {new_edits: true})
+    console.log(`Error: ------`)
+    console.log(e)
+  }
+  try {
+    let ref = await db.bulkDocs(oldEdits, {new_edits: false})
+  } catch (e) {
+    let ref = await db._bulkDocs(oldEdits, {new_edits: false})
+    console.log(`Error: ------`)
+    console.log(e)
+  }
 
 }
 
