@@ -82,6 +82,11 @@ const SolidState = (config) => {
     }
     if (disposed) return { ok: false, disposed: true }
     await projector.start()
+    // dispose() may have landed while start() was running.
+    if (disposed) {
+      projector.stop()
+      return { ok: false, disposed: true }
+    }
     started = true
     emit('ready', { containerUrl })
     return { ok: true, containerUrl }

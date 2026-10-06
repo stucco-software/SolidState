@@ -4,18 +4,19 @@ import { createFakePod } from './test/fake-pod.js'
 import { nodeUrl } from './layout.js'
 
 // Lets one test make projector.start() fail after it has opened its live feed.
-const failure = vi.hoisted(() => ({ start: false }))
+const failure = vi.hoisted(() => ({ start: false, afterStart: null }))
 vi.mock('./projector.js', async (importOriginal) => {
   const real = await importOriginal()
   return {
     ...real,
     createProjector: (options) => {
       const projector = real.createProjector(options)
-      if (!failure.start) return projector
+      if (!failure.start && !failure.afterStart) return projector
       return {
         ...projector,
         start: async () => {
           await projector.start()
+          if (failure.afterStart) return failure.afterStart()
           throw new Error('projectAll failed')
         },
       }
@@ -191,6 +192,23 @@ describe('SolidState lifecycle', () => {
     await new Promise((r) => setTimeout(r, 50))
     expect(pod.files.has(nodeUrl(containerUrl, 'late'))).toBe(false)
     await store.dispose()
+  })
+
+  it('re-checks dispose after the projector starts', async () => {
+    const pod = createFakePod()
+    const { store, containerUrl } = open(pod)
+    const ready = []
+    store.on('ready', (e) => ready.push(e))
+    // dispose() lands while projector.start() is still running
+    failure.afterStart = () => { store.dispose() }
+    const result = await store.ready
+    failure.afterStart = null
+    expect(result).toEqual({ ok: false, disposed: true })
+    expect(ready).toEqual([])
+    await store.idle()
+    await store.post({ '@id': 'late', title: 'x' })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(pod.files.has(nodeUrl(containerUrl, 'late'))).toBe(false)
   })
 
   it('idle does nothing before start-up has succeeded', async () => {

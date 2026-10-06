@@ -52,4 +52,11 @@ describe('discoverStorageRoot', () => {
     })
     expect(await discoverStorageRoot(pod.webId, pod.fetch)).toBe('https://nested.example/')
   })
+
+  it('times out a profile fetch that never settles', async () => {
+    const hang = (url, init) =>
+      new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal.reason)))
+    await expect(discoverStorageRoot('https://e.x/profile/card#me', hang, { timeoutMs: 20 }))
+      .rejects.toThrow(/could not read WebID profile/)
+  })
 })

@@ -8,13 +8,15 @@ const withSlash = (url) => (url.endsWith('/') ? url : `${url}/`)
 // pim:storage in the profile. Fall back to the WebID's origin only when the
 // profile loaded and says nothing about storage; if the profile can't be
 // read at all, throw, because a guessed root would read and write the wrong
-// place.
-export const discoverStorageRoot = async (webId, fetch) => {
+// place. A profile fetch that doesn't settle within `timeoutMs` counts as
+// unreadable, so callers awaiting start-up can't hang behind it.
+export const discoverStorageRoot = async (webId, fetch, { timeoutMs = 30000 } = {}) => {
   const profileUrl = webId.split('#')[0]
   let res
   try {
     res = await fetch(profileUrl, {
       headers: { accept: 'application/ld+json, text/turtle;q=0.8' },
+      signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err) {
     throw new Error(`could not read WebID profile ${profileUrl}: ${err?.message ?? err}`)
