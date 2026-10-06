@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stripPouch, nodeToNQuads, nquadsToNode, nquadsToNodes, nativize, legacyContext, sameGraph } from './rdf.js'
+import { stripPouch, nodeToNQuads, nquadsToNode, nquadsToNodes, nativize, legacyContext, sameGraph, unescapeLongUnicode } from './rdf.js'
 
 // A site-style context, shaped like thoughtloom's generateContext output.
 const ctx = {
@@ -159,5 +159,24 @@ describe('nativize keeps what it cannot represent', () => {
     expect(nativize({ limit: '12345678901234567890' }, ctx)).toEqual({ limit: '12345678901234567890' })
     expect(nativize({ count: { '@type': 'xsd:integer', '@value': '12345678901234567890' } }, ctx))
       .toEqual({ count: '12345678901234567890' })
+  })
+})
+
+describe('\\U escapes (servers write non-BMP characters, e.g. emoji, this way)', () => {
+  const clown = '<https://e.x/v/a> <https://e.x/v/#title> "clown \\U0001F921 time" .\n'
+
+  it('parses them', async () => {
+    const node = await nquadsToNode(clown, { '@base': 'https://e.x/v/', '@vocab': '#' }, 'a')
+    expect(node.title).toBe('clown 🤡 time')
+  })
+
+  it('compares equal to the raw character', async () => {
+    expect(await sameGraph(clown, clown.replace('\\U0001F921', '🤡'))).toBe(true)
+  })
+
+  it('keeps BMP code points escaped and leaves an escaped backslash alone', () => {
+    expect(unescapeLongUnicode('"a\\U0000000Ab"')).toBe('"a\\u000Ab"')
+    expect(unescapeLongUnicode('"a\\\\U0001F921"')).toBe('"a\\\\U0001F921"')
+    expect(unescapeLongUnicode('"a\\\\\\U0001F921"')).toBe('"a\\\\🤡"')
   })
 })

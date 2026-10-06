@@ -59,8 +59,24 @@ export const nodeToNQuads = (doc, context) =>
   jsonld.toRDF({ '@context': context, '@graph': [typeDecimals(stripPouch(doc), context)] }, { format: NQUADS })
 
 // Same triples, regardless of blank-node labels and line order.
+// jsonld's N-Quads parser (rdf-canonize) throws "Unsupported U escape" on
+// \UXXXXXXXX, which servers (CSS among them) use for characters outside the
+// Basic Multilingual Plane, e.g. emoji. Rewrite them before parsing: a non-BMP
+// code point becomes the character itself (raw UTF-8 is valid N-Quads); a
+// BMP one becomes the \uXXXX form the parser does accept, so control
+// characters stay escaped. An escaped backslash before the U (an even run of
+// backslashes) isn't an escape and is left alone.
+const LONG_UNICODE = /(\\+)U([0-9A-Fa-f]{8})/g
+export const unescapeLongUnicode = (nquads) =>
+  nquads.replace(LONG_UNICODE, (match, slashes, hex) => {
+    if (slashes.length % 2 === 0) return match
+    const codePoint = parseInt(hex, 16)
+    const prefix = slashes.slice(1)
+    return prefix + (codePoint > 0xffff ? String.fromCodePoint(codePoint) : `\\u${hex.slice(4)}`)
+  })
+
 const canonical = (nquads) =>
-  jsonld.canonize(nquads, { inputFormat: NQUADS, algorithm: 'URDNA2015', format: NQUADS })
+  jsonld.canonize(unescapeLongUnicode(nquads), { inputFormat: NQUADS, algorithm: 'URDNA2015', format: NQUADS })
 // A body that doesn't parse as n-quads (another app wrote Turtle or plain
 // text) is never the same graph.
 export const sameGraph = async (a, b) => {
@@ -166,7 +182,7 @@ const inlineBlankNodes = (nodes) => {
 
 export const nquadsToNodes = async (nquads, context) => {
   if (!nquads || !nquads.trim()) return []
-  const expanded = await jsonld.fromRDF(nquads, { format: NQUADS })
+  const expanded = await jsonld.fromRDF(unescapeLongUnicode(nquads), { format: NQUADS })
   const compacted = await jsonld.compact(expanded, context)
   return inlineBlankNodes(nodesOf(compacted)).map((node) => nativize(node, context))
 }
