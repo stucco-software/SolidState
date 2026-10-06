@@ -19,8 +19,10 @@ store.on('outside-change', ({ id }) => console.warn('pod copy changed elsewhere'
 const { ok, error } = await store.ready   // never rejects
 await store.post({ '@id': 'uuid:1', title: { en: 'Hello' } })
 await store.idle()          // everything written so far has reached the pod
-await store.close()         // on sign-out or when switching sites
+await store.close()         // on sign-out or when switching sites; await it before re-creating
 ```
+
+Await `close()` before creating a new store with the same graph name. PouchDB shares one database connection per name, so a `close()` that finishes after the new store opens closes the new store's connection too.
 
 See CHANGELOG.md for the 0.3 changes and breaking changes.
 

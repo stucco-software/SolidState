@@ -30,6 +30,18 @@ Sync rebuilt around one pod resource per node.
 - Pod requests time out after 30 seconds and are retried with backoff.
 - If the WebID profile can't be read, sync doesn't start (`ready` resolves
   `{ ok: false }`)—it never guesses a storage root.
+- Await `close()` before creating a new store with the same graph name.
+  PouchDB shares one database connection per name, so a `close()` that
+  finishes after the new store opens closes the new store's connection too.
+- 401 and 403 responses aren't retried; after re-authenticating, call
+  `store.idle()` to project anything that failed.
+
+Not yet:
+
+- Resolving an `outside-change` (keep solidstate's version or adopt the
+  pod's) — planned with conflict handling in a later release.
+- A store whose start-up failed (`ready` → `{ ok: false }`) doesn't retry;
+  create a new store to try again.
 
 Breaking:
 
