@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- Parse `\UXXXXXXXX` escapes in N-Quads. Servers (CSS among them) write
+  characters outside the Basic Multilingual Plane, such as emoji, that way,
+  and jsonld's parser rejected them ("Unsupported U escape"), so graphs
+  containing emoji couldn't be migrated, imported or compared.
+
 ## 0.3.0
 
 Sync rebuilt around one pod resource per node.

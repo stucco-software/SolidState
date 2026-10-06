@@ -6,6 +6,7 @@ export const legacyContext: {
 };
 export function stripPouch(doc: any): any;
 export function nodeToNQuads(doc: any, context: any): any;
+export function unescapeLongUnicode(nquads: any): any;
 export function sameGraph(a: any, b: any): Promise<boolean>;
 export function nativize(node: any, context: any): any;
 export function nquadsToNodes(nquads: any, context: any): Promise<any>;
