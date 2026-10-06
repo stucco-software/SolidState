@@ -26,9 +26,30 @@ describe('discoverStorageRoot', () => {
     expect(await discoverStorageRoot(pod.webId, pod.fetch)).toBe(`${pod.origin}/`)
   })
 
-  it('falls back when the profile cannot be fetched', async () => {
+  it('throws when the profile cannot be fetched', async () => {
     const pod = createFakePod()
     pod.failNext('GET', 500)
-    expect(await discoverStorageRoot(pod.webId, pod.fetch)).toBe(`${pod.origin}/`)
+    await expect(discoverStorageRoot(pod.webId, pod.fetch)).rejects.toThrow(/could not read WebID profile/)
+  })
+
+  it('throws when the profile fetch errors', async () => {
+    const pod = createFakePod()
+    const fetch = async () => { throw new Error('offline') }
+    await expect(discoverStorageRoot(pod.webId, fetch)).rejects.toThrow(/could not read WebID profile .*offline/)
+  })
+
+  it('finds pim:storage on a nested node of a JSON-LD profile', async () => {
+    const pod = createFakePod()
+    pod.files.set(pod.profileUrl, {
+      body: JSON.stringify({
+        '@id': pod.profileUrl,
+        'http://xmlns.com/foaf/0.1/primaryTopic': {
+          '@id': pod.webId,
+          'http://www.w3.org/ns/pim/space#storage': { '@id': 'https://nested.example/' },
+        },
+      }),
+      type: 'application/ld+json', etag: '"p"',
+    })
+    expect(await discoverStorageRoot(pod.webId, pod.fetch)).toBe('https://nested.example/')
   })
 })

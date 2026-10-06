@@ -17,4 +17,8 @@ describe('layout', () => {
     expect(idFromUrl(c, `${c}sub/`)).toBeNull()
     expect(idFromUrl(c, 'https://pod.test/elsewhere/x')).toBeNull()
   })
+
+  it('returns null for a malformed percent-encoded name', () => {
+    expect(idFromUrl(c, `${c}100%`)).toBeNull()
+  })
 })
