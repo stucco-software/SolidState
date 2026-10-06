@@ -10,12 +10,16 @@ export class PodError extends Error {
 
 const CONTAINS = /<([^>]+)>\s+<http:\/\/www\.w3\.org\/ns\/ldp#contains>\s+<([^>]+)>/g
 
+// Release the socket for responses whose body we never read.
+const drain = (res) => res.body?.cancel?.().catch(() => {})
+
 export const createPodClient = (fetch) => {
   const fail = async (method, url, res) =>
     new PodError(method, url, res.status, (await res.text().catch(() => '')).slice(0, 200))
 
   const etag = async (url) => {
     const res = await fetch(url, { method: 'HEAD' })
+    drain(res)
     return res.ok ? res.headers.get('etag') : null
   }
 
@@ -26,25 +30,44 @@ export const createPodClient = (fetch) => {
     return { body: await res.text(), etag: res.headers.get('etag') }
   }
 
-  // New resources use If-None-Match: *, updates If-Match: <etag>, so a change
-  // made outside solidstate is never overwritten silently. `overwrite` skips
-  // both (the migration archive).
-  const put = async (url, body, { etag: expected, overwrite = false, contentType = NQUADS } = {}) => {
+  // Preconditions, in order: `overwrite` sends none (the migration archive);
+  // a known `etag` sends If-Match so a change made outside solidstate is never
+  // overwritten silently; `create` sends If-None-Match: * so we never clobber an
+  // existing resource. With none of these we don't know the current ETag (e.g.
+  // a server that doesn't expose it via CORS), so we write unconditionally
+  // rather than 412 forever.
+  // If-Match uses strong comparison: a server issuing weak (W/"...") ETags
+  // would 412 every update. CSS issues strong ETags.
+  const put = async (url, body, { etag: expected, create = false, overwrite = false, contentType = NQUADS } = {}) => {
     const headers = { 'content-type': contentType }
-    if (!overwrite) {
-      if (expected) headers['if-match'] = expected
-      else headers['if-none-match'] = '*'
-    }
+    if (overwrite) {
+      // no conditional header
+    } else if (expected) headers['if-match'] = expected
+    else if (create) headers['if-none-match'] = '*'
     const res = await fetch(url, { method: 'PUT', headers, body })
-    if (res.status === 412) return { conflict: true }
+    if (res.status === 412) {
+      drain(res)
+      return { conflict: true }
+    }
     if (!res.ok) throw await fail('PUT', url, res)
+    drain(res)
+    // CSS doesn't return an ETag on PUT, so we HEAD afterwards. Another client
+    // writing in between would make us record their ETag. Accepted: the window
+    // is narrow and there is a single writer per node in practice.
     return { etag: res.headers.get('etag') ?? (await etag(url)) }
   }
 
+  // As in put, If-Match uses strong comparison; weak ETags would always 412.
   const remove = async (url, { etag: expected } = {}) => {
     const res = await fetch(url, { method: 'DELETE', headers: expected ? { 'if-match': expected } : {} })
-    if (res.status === 412) return { conflict: true }
-    if (res.ok || res.status === 404) return {}
+    if (res.status === 412) {
+      drain(res)
+      return { conflict: true }
+    }
+    if (res.ok || res.status === 404) {
+      drain(res)
+      return {}
+    }
     throw await fail('DELETE', url, res)
   }
 
@@ -68,10 +91,18 @@ export const createPodClient = (fetch) => {
     for (const segment of containerUrl.slice(rootUrl.length).split('/').filter(Boolean)) {
       url += `${segment}/`
       const head = await fetch(url, { method: 'HEAD' })
-      if (head.ok) continue
+      if (head.ok) {
+        drain(head)
+        continue
+      }
       if (head.status !== 404) throw await fail('HEAD', url, head)
+      drain(head)
       const res = await fetch(url, { method: 'PUT', headers: { 'content-type': 'text/turtle' }, body: '' })
+      // A 409 is accepted as "exists or being created". Some servers (NSS)
+      // answer 409 for a PUT to a container URL, in which case a later PUT
+      // will fail with that server's own error.
       if (!res.ok && res.status !== 409) throw await fail('PUT', url, res)
+      drain(res)
     }
   }
 

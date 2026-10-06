@@ -18,7 +18,7 @@ describe('pod client', () => {
   it('PUT creates with If-None-Match and updates with If-Match', async () => {
     const { pod, client } = setup()
     const url = `${pod.storage}n`
-    const first = await client.put(url, 'a')
+    const first = await client.put(url, 'a', { create: true })
     expect(pod.requests('PUT').at(-1).headers['if-none-match']).toBe('*')
     await client.put(url, 'b', { etag: first.etag })
     expect(pod.requests('PUT').at(-1).headers['if-match']).toBe(first.etag)
@@ -29,8 +29,19 @@ describe('pod client', () => {
     const { pod, client } = setup()
     const url = `${pod.storage}n`
     await client.put(url, 'a')
-    expect(await client.put(url, 'b')).toEqual({ conflict: true })
+    expect(await client.put(url, 'b', { create: true })).toEqual({ conflict: true })
     expect(await client.remove(url, { etag: '"stale"' })).toEqual({ conflict: true })
+  })
+
+  it('writes unconditionally when there is neither an etag nor create', async () => {
+    const { pod, client } = setup()
+    const url = `${pod.storage}n`
+    await client.put(url, 'a')
+    await client.put(url, 'b')
+    const { headers } = pod.requests('PUT').at(-1)
+    expect(headers['if-match']).toBeUndefined()
+    expect(headers['if-none-match']).toBeUndefined()
+    expect(pod.files.get(url).body).toBe('b')
   })
 
   it('overwrite skips conditional headers', async () => {
