@@ -107,3 +107,57 @@ describe('nativize', () => {
     })
   })
 })
+
+describe('decimal extremes', () => {
+  const lit = (nq) => nq.match(/"([^"]*)"\^\^<http:\/\/www\.w3\.org\/2001\/XMLSchema#decimal>/)?.[1]
+  const cases = [
+    [50, '50.0'],
+    [-50.5, '-50.5'],
+    [1e21, '1000000000000000000000.0'],
+    [1e-25, `0.${'0'.repeat(24)}1`],
+    [1.5e-7, '0.00000015'],
+    [0, '0.0'],
+  ]
+  for (const [n, text] of cases) {
+    it(`writes ${n} as ${text} and reads it back`, async () => {
+      const nq = await nodeToNQuads({ '@id': 'd', price: n }, ctx)
+      expect(lit(nq)).toBe(text)
+      expect((await nquadsToNode(nq, ctx, 'd')).price).toBe(n)
+    })
+  }
+  it('leaves non-finite numbers untouched, without throwing', async () => {
+    for (const n of [NaN, Infinity]) {
+      const nq = await nodeToNQuads({ '@id': 'd', price: n }, ctx)
+      // jsonld's own serialisation, not a mangled '.0' literal
+      expect(lit(nq)).not.toMatch(/\.0$/)
+    }
+  })
+})
+
+describe('language and index maps', () => {
+  const mapCtx = {
+    ...ctx,
+    en: { '@id': 'en', '@type': 'xsd:integer' },
+    title: { '@id': 'title', '@container': '@language' },
+    notes: { '@id': 'notes', '@container': ['@index', '@set'] },
+  }
+  it('does not walk a language map as terms', async () => {
+    expect(nativize({ title: { en: '42' } }, mapCtx)).toEqual({ title: { en: '42' } })
+    const nq = await nodeToNQuads({ '@id': 'x', title: { en: '42' } }, mapCtx)
+    expect((await nquadsToNode(nq, mapCtx, 'x')).title.en).toBe('42')
+  })
+  it('does not walk an index map as terms', () => {
+    expect(nativize({ notes: { en: ['42'] } }, mapCtx)).toEqual({ notes: { en: ['42'] } })
+  })
+})
+
+describe('nativize keeps what it cannot represent', () => {
+  it('keeps an empty string', () => {
+    expect(nativize({ count: { '@type': 'xsd:integer', '@value': '' } }, ctx)).toEqual({ count: '' })
+  })
+  it('keeps an integer outside the safe range', () => {
+    expect(nativize({ limit: '12345678901234567890' }, ctx)).toEqual({ limit: '12345678901234567890' })
+    expect(nativize({ count: { '@type': 'xsd:integer', '@value': '12345678901234567890' } }, ctx))
+      .toEqual({ count: '12345678901234567890' })
+  })
+})
