@@ -13,7 +13,11 @@ const CONTAINS = /<([^>]+)>\s+<http:\/\/www\.w3\.org\/ns\/ldp#contains>\s+<([^>]
 // Release the socket for responses whose body we never read.
 const drain = (res) => res.body?.cancel?.().catch(() => {})
 
-export const createPodClient = (fetch) => {
+export const createPodClient = (rawFetch, { timeoutMs = 30000 } = {}) => {
+  // A timeout rejects with a TimeoutError DOMException, which has no
+  // `retryable`, so callers treat it like a network error and retry.
+  const fetch = (url, init = {}) => rawFetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+
   const fail = async (method, url, res) =>
     new PodError(method, url, res.status, (await res.text().catch(() => '')).slice(0, 200))
 

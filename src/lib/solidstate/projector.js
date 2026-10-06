@@ -10,12 +10,22 @@ const MAX_DELAY = 5 * 60 * 1000
 // time the node is looked at, so listeners must tolerate repeats. Runs one projection at a time, each against the
 // doc's state when it runs, so a burst of edits ends in one PUT of the latest
 // revision (later queued runs find it already current).
+//
+// 401/403 are permanent as far as the pod client is concerned (PodError marks
+// only 5xx/429 retryable). P3 handles session refresh and calls projectAll()
+// afterwards.
 export const createProjector = ({ db, pod, containerUrl, context, emit = () => {}, retryBaseMs = 1000 }) => {
+  // A throwing listener must not break the projection chain.
+  const safeEmit = (name, detail) => {
+    try {
+      emit(name, detail)
+    } catch {}
+  }
   let feed = null
   let stopped = false
   let chain = Promise.resolve()
   const attempts = new Map()
-  const timers = new Set()
+  const retryTimers = new Map()
 
   const current = async (id) => {
     try {
@@ -30,7 +40,7 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     const id = doc._id
     if (!isProjectable(id)) return 'skipped'
     if (doc._conflicts?.length) {
-      emit('conflicted', { id })
+      safeEmit('conflicted', { id })
       return 'conflicted'
     }
     const projection = await readProjection(db, id)
@@ -40,11 +50,11 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       if (!projection) return 'unchanged'
       const result = await pod.remove(url, { etag: projection.etag })
       if (result.conflict) {
-        emit('outside-change', { id, url })
+        safeEmit('outside-change', { id, url })
         return 'outside-change'
       }
       await dropProjection(db, id)
-      emit('projected', { id, deleted: true })
+      safeEmit('projected', { id, deleted: true })
       return 'deleted'
     }
 
@@ -65,27 +75,27 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       // device projecting the same revision. Adopt that copy.
       const remote = await pod.get(url)
       if (!remote || !(await sameGraph(remote.body, body))) {
-        emit('outside-change', { id, url })
+        safeEmit('outside-change', { id, url })
         return 'outside-change'
       }
       result = { etag: remote.etag }
     }
     await writeProjection(db, id, { rev: doc._rev, etag: result.etag })
-    emit('projected', { id })
+    safeEmit('projected', { id })
     return 'projected'
   }
 
   const retryLater = (id, error) => {
-    if (stopped) return
+    if (stopped || retryTimers.has(id)) return
     const n = (attempts.get(id) ?? 0) + 1
     attempts.set(id, n)
     const delay = Math.min(retryBaseMs * 2 ** (n - 1), MAX_DELAY)
-    emit('sync-error', { id, error, retryIn: delay })
+    safeEmit('sync-error', { id, error, retryIn: delay })
     const timer = setTimeout(() => {
-      timers.delete(timer)
+      retryTimers.delete(id)
       enqueue(id)
     }, delay)
-    timers.add(timer)
+    retryTimers.set(id, timer)
   }
 
   const enqueue = (id) => {
@@ -97,8 +107,10 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
         attempts.delete(id)
       } catch (error) {
         // PodError marks 4xx as not retryable; network errors and 5xx are.
-        if (error?.retryable === false) emit('sync-error', { id, error })
-        else retryLater(id, error)
+        if (error?.retryable === false) {
+          attempts.delete(id)
+          safeEmit('sync-error', { id, error })
+        } else retryLater(id, error)
       }
     })
     return chain
@@ -117,10 +129,12 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
 
   const start = async () => {
     stopped = false
+    feed?.cancel()
     feed = db.changes({ since: 'now', live: true })
     feed.on('change', (change) => {
       if (!isInternal(change.id)) enqueue(change.id)
     })
+    feed.on('error', (error) => safeEmit('sync-error', { stage: 'changes', error }))
     await projectAll()
   }
 
@@ -128,8 +142,9 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     stopped = true
     feed?.cancel()
     feed = null
-    for (const timer of timers) clearTimeout(timer)
-    timers.clear()
+    for (const timer of retryTimers.values()) clearTimeout(timer)
+    retryTimers.clear()
+    attempts.clear()
   }
 
   // Resolves once everything queued so far (and anything it queued) is done.
@@ -142,5 +157,7 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     } while (seen !== chain)
   }
 
-  return { projectDoc, projectAll, start, stop, idle, enqueue }
+  const pendingRetries = () => retryTimers.size
+
+  return { projectDoc, projectAll, start, stop, idle, enqueue, pendingRetries }
 }

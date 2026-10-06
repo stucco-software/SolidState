@@ -140,4 +140,56 @@ describe('projector', () => {
     await new Promise((r) => setTimeout(r, 30))
     expect(pod.requests('PUT', 'denied')).toHaveLength(1)
   })
+
+  it('keeps one pending retry per id however often it fails', async () => {
+    const pod = createFakePod()
+    const db = memoryDb()
+    const containerUrl = `${pod.storage}data/site/`
+    const projector = createProjector({
+      db, pod: createPodClient(pod.fetch), containerUrl, context: ctx, retryBaseMs: 1000,
+    })
+    pod.failNext('PUT', 503, 100, 'storm')
+    await db.put({ _id: 'storm', title: 'S' })
+    for (let i = 0; i < 5; i++) await projector.projectAll()
+    await projector.idle()
+    expect(projector.pendingRetries()).toBe(1)
+    projector.stop()
+    expect(projector.pendingRetries()).toBe(0)
+  })
+
+  it('a throwing listener does not stop projection', async () => {
+    const pod = createFakePod()
+    const db = memoryDb()
+    const containerUrl = `${pod.storage}data/site/`
+    const emit = (name) => {
+      if (name === 'projected') throw new Error('listener bug')
+    }
+    const projector = createProjector({ db, pod: createPodClient(pod.fetch), containerUrl, context: ctx, emit })
+    await db.put({ _id: 'a', title: 'A' })
+    await db.put({ _id: 'b', title: 'B' })
+    await projector.projectAll()
+    expect(pod.files.has(nodeUrl(containerUrl, 'a'))).toBe(true)
+    expect(pod.files.has(nodeUrl(containerUrl, 'b'))).toBe(true)
+    expect(projector.pendingRetries()).toBe(0)
+  })
+
+  it('start() twice cancels the first feed', async () => {
+    const { db, projector } = setup()
+    const real = db.changes.bind(db)
+    let cancelled = 0
+    db.changes = (opts) => {
+      const feed = real(opts)
+      const cancel = feed.cancel.bind(feed)
+      feed.cancel = () => {
+        cancelled++
+        return cancel()
+      }
+      return feed
+    }
+    await projector.start()
+    await projector.start()
+    expect(cancelled).toBe(1)
+    projector.stop()
+    expect(cancelled).toBe(2)
+  })
 })

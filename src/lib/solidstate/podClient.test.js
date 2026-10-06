@@ -87,4 +87,11 @@ describe('pod client', () => {
     pod.failNext('PUT', 403)
     expect((await client.put(`${pod.storage}m`, 'a').catch((e) => e)).retryable).toBe(false)
   })
+
+  it('times out a request that never settles', async () => {
+    const hang = (url, init) =>
+      new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(init.signal.reason)))
+    const client = createPodClient(hang, { timeoutMs: 20 })
+    await expect(client.get('https://e.x/a')).rejects.toMatchObject({ name: 'TimeoutError' })
+  })
 })
