@@ -94,4 +94,11 @@ describe('pod client', () => {
     const client = createPodClient(hang, { timeoutMs: 20 })
     await expect(client.get('https://e.x/a')).rejects.toMatchObject({ name: 'TimeoutError' })
   })
+
+  it('sends the n-quads accept header on HEAD, as GET does', async () => {
+    const { pod, client } = setup()
+    await client.put(`${pod.storage}h`, 'a')
+    await client.etag(`${pod.storage}h`)
+    expect(pod.requests('HEAD').at(-1).headers.accept).toBe('application/n-quads')
+  })
 })

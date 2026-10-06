@@ -10,9 +10,9 @@ import { nodeUrl } from './layout.js'
 
 const ctx = { '@base': 'https://e.x/v/', '@vocab': '#' }
 
-const setup = async (nodes = []) => {
+const setup = async (nodes = [], { fetch } = {}) => {
   const pod = createFakePod()
-  const client = createPodClient(pod.fetch)
+  const client = createPodClient(fetch ? fetch(pod) : pod.fetch)
   const containerUrl = `${pod.storage}data/site/`
   for (const node of nodes) await client.put(nodeUrl(containerUrl, node['@id']), await nodeToNQuads(node, ctx))
   const db = memoryDb()
@@ -66,5 +66,47 @@ describe('importContainer', () => {
     const { run, client, containerUrl } = await setup()
     await client.put(`${containerUrl}nested/x`, '')
     expect(await run()).toEqual({ added: 0 })
+  })
+
+  it('isolates a malformed member so the rest still import', async () => {
+    const { db, run, ev, pod, containerUrl } = await setup([{ '@id': 'good', title: 'G' }])
+    pod.files.set(nodeUrl(containerUrl, 'bad'), { body: '@prefix x: <y> .\n x:a x:b "c" .', type: 'text/turtle', etag: '"z"' })
+    expect(await run()).toEqual({ added: 1 })
+    expect((await db.get('good')).title).toBe('G')
+    const errors = ev.named('sync-error')
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatchObject({ id: 'bad', stage: 'import', url: nodeUrl(containerUrl, 'bad') })
+  })
+
+  it('isolates a failing fetch so the rest still import', async () => {
+    const { db, run, ev, pod } = await setup([{ '@id': 'flaky', title: 'X' }, { '@id': 'fine', title: 'F' }])
+    pod.failNext('GET', 500, 1, 'flaky')
+    expect(await run()).toEqual({ added: 1 })
+    expect((await db.get('fine')).title).toBe('F')
+    expect(ev.named('sync-error').map((e) => e.id)).toEqual(['flaky'])
+  })
+
+  it('survives a throwing emit listener', async () => {
+    const { pod, client, db, containerUrl } = await setup([{ '@id': 'a', title: 'A' }])
+    pod.touch(nodeUrl(containerUrl, 'b'), 'garbage')
+    const emit = () => {
+      throw new Error('listener')
+    }
+    expect(await importContainer({ db, pod: client, containerUrl, context: ctx, emit })).toEqual({ added: 1 })
+  })
+
+  it('warns once when the pod returns no ETags', async () => {
+    const stripEtag = (pod) => async (u, i) => {
+      const res = await pod.fetch(u, i)
+      const h = new Headers(res.headers)
+      h.delete('etag')
+      return new Response(res.body, { status: res.status, headers: h })
+    }
+    const { db, run, ev } = await setup([{ '@id': 'a', title: 'A' }, { '@id': 'b', title: 'B' }], { fetch: stripEtag })
+    expect(await run()).toEqual({ added: 2 })
+    expect((await db.get('b')).title).toBe('B')
+    const warnings = ev.named('sync-error').filter((e) => /no ETag/.test(e.error.message))
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0].stage).toBe('import')
   })
 })

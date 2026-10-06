@@ -22,7 +22,9 @@ export const createPodClient = (rawFetch, { timeoutMs = 30000 } = {}) => {
     new PodError(method, url, res.status, (await res.text().catch(() => '')).slice(0, 200))
 
   const etag = async (url) => {
-    const res = await fetch(url, { method: 'HEAD' })
+    // Same accept as get(), so the ETag compares like-for-like on servers
+    // whose ETag varies by representation.
+    const res = await fetch(url, { method: 'HEAD', headers: { accept: NQUADS } })
     drain(res)
     return res.ok ? res.headers.get('etag') : null
   }
