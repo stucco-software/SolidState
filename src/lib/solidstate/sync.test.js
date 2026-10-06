@@ -3,6 +3,26 @@ import SolidState from './index.js'
 import { createFakePod } from './test/fake-pod.js'
 import { nodeUrl } from './layout.js'
 
+// Lets one test make projector.start() fail after it has opened its live feed.
+const failure = vi.hoisted(() => ({ start: false }))
+vi.mock('./projector.js', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    ...real,
+    createProjector: (options) => {
+      const projector = real.createProjector(options)
+      if (!failure.start) return projector
+      return {
+        ...projector,
+        start: async () => {
+          await projector.start()
+          throw new Error('projectAll failed')
+        },
+      }
+    },
+  }
+})
+
 const ctx = { '@base': 'https://e.x/v/', '@vocab': '#' }
 
 const open = (pod, extra = {}) => {
@@ -22,7 +42,7 @@ describe('SolidState 0.3 with a pod', () => {
   it('projects posts, updates and deletes', async () => {
     const pod = createFakePod()
     const { store, containerUrl } = open(pod)
-    await store.ready
+    expect(await store.ready).toEqual({ ok: true, containerUrl })
     const doc = await store.post({ '@id': 'n1', title: 'Hello' })
     await vi.waitFor(() => expect(pod.files.get(nodeUrl(containerUrl, 'n1'))?.body).toContain('"Hello"'))
     await store.put('n1', { title: 'Bye' })
@@ -124,7 +144,7 @@ describe('SolidState 0.3 with a pod', () => {
 
   it('works without a session (local only)', async () => {
     const store = SolidState({ graph: `local-${crypto.randomUUID()}`, pouch: { adapter: 'memory' } })
-    await store.ready
+    expect(await store.ready).toEqual({ ok: true, local: true })
     await store.post({ '@id': 'x', title: 'y' })
     expect((await store.get('x')).title).toBe('y')
     await store.dispose()
@@ -136,8 +156,138 @@ describe('SolidState 0.3 with a pod', () => {
     const { store } = open(pod)
     const errors = []
     store.on('sync-error', (e) => errors.push(e))
-    await store.ready
+    const result = await store.ready
+    expect(result.ok).toBe(false)
+    expect(result.error).toBeDefined()
     expect(errors[0]).toMatchObject({ stage: 'start' })
     await store.dispose()
+  })
+})
+
+describe('SolidState lifecycle', () => {
+  it('survives a throwing event listener', async () => {
+    const pod = createFakePod()
+    const { store, containerUrl } = open(pod)
+    const errors = []
+    store.on('ready', () => { throw new Error('listener bug') })
+    store.on('sync-error', (e) => errors.push(e))
+    expect(await store.ready).toEqual({ ok: true, containerUrl })
+    expect(errors).toEqual([])
+    await store.dispose()
+  })
+
+  it('stops the projector when start-up fails part way', async () => {
+    const pod = createFakePod()
+    failure.start = true
+    const { store, containerUrl } = open(pod)
+    const errors = []
+    store.on('sync-error', (e) => errors.push(e))
+    const result = await store.ready
+    failure.start = false
+    expect(result.ok).toBe(false)
+    expect(errors[0]).toMatchObject({ stage: 'start' })
+    // Not disposed: a leaked live feed would still project this write.
+    await store.post({ '@id': 'late', title: 'x' })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(pod.files.has(nodeUrl(containerUrl, 'late'))).toBe(false)
+    await store.dispose()
+  })
+
+  it('idle does nothing before start-up has succeeded', async () => {
+    const pod = createFakePod()
+    pod.failNext('GET', 500, 1, 'profile')
+    const { store } = open(pod)
+    const errors = []
+    store.on('sync-error', (e) => errors.push(e))
+    await store.post({ '@id': 'n1', title: 'x' })
+    await store.idle()
+    await store.ready
+    await store.idle()
+    expect(errors[0]).toMatchObject({ stage: 'start' })
+    expect(pod.requests('PUT').length > 0).toBe(false)
+    await store.dispose()
+  })
+
+  it('clear() right after construction settles cleanly and projects nothing', async () => {
+    const pod = createFakePod()
+    const { store } = open(pod)
+    const errors = []
+    store.on('sync-error', (e) => errors.push(e))
+    await expect(store.clear()).resolves.toBe(true)
+    const before = pod.log.length
+    await new Promise((r) => setTimeout(r, 30))
+    expect(errors).toEqual([])
+    expect(pod.log.slice(before).some((r) => r.method === 'PUT')).toBe(false)
+  })
+
+  // A second device whose import of 'shared' is held open until `release()`.
+  const openGated = async () => {
+    const pod = createFakePod()
+    const first = open(pod)
+    await first.store.ready
+    await first.store.post({ '@id': 'shared', title: 'From A' })
+    await first.store.idle()
+    await first.store.dispose()
+    let release
+    const gate = new Promise((r) => { release = r })
+    let reached
+    const atGate = new Promise((r) => { reached = r })
+    const fetch = async (url, init) => {
+      if (String(url).endsWith('/shared') && (init?.method ?? 'GET') === 'GET') {
+        reached()
+        await gate
+      }
+      return pod.fetch(url, init)
+    }
+    const store = SolidState({
+      graph: `${first.graph}-gated`,
+      session: { info: { webId: pod.webId }, fetch },
+      context: ctx,
+      container: first.containerUrl.slice(pod.storage.length),
+      pouch: { adapter: 'memory' },
+    })
+    await atGate
+    return { pod, store, release, containerUrl: first.containerUrl }
+  }
+
+  it('idle does nothing while the import is still running', async () => {
+    const { pod, store, release, containerUrl } = await openGated()
+    await store.post({ '@id': 'n2', title: 'x' })
+    await store.idle()
+    expect(pod.files.has(nodeUrl(containerUrl, 'n2'))).toBe(false)
+    release()
+    expect((await store.ready).ok).toBe(true)
+    await store.idle()
+    expect(pod.files.has(nodeUrl(containerUrl, 'n2'))).toBe(true)
+    await store.dispose()
+  })
+
+  it('clear() during start-up waits for it instead of racing the destroy', async () => {
+    const { store, release } = await openGated()
+    const errors = []
+    store.on('sync-error', (e) => errors.push(e))
+    const cleared = store.clear()
+    release()
+    await expect(cleared).resolves.toBe(true)
+    expect(await store.ready).toMatchObject({ ok: false, disposed: true })
+    expect(errors).toEqual([])
+  })
+
+  it('close() resolves and releases the database', async () => {
+    const pod = createFakePod()
+    const { store } = open(pod)
+    await store.ready
+    await store.post({ '@id': 'x', title: 'y' })
+    await expect(store.close()).resolves.toBeUndefined()
+  })
+
+  it('changes() rejects named filters and forgets feeds that error or complete', async () => {
+    const store = SolidState({ graph: `local-${crypto.randomUUID()}`, pouch: { adapter: 'memory' } })
+    await store.ready
+    expect(() => store.changes({ filter: 'ddoc/name' })).toThrow(TypeError)
+    expect(() => store.changes({ filter: 'ddoc/name' })).toThrow('solidstate changes() supports filter functions only')
+    const feed = store.changes({ since: 0 })
+    await new Promise((r) => feed.on('complete', r))
+    await store.close()
   })
 })
