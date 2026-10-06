@@ -1,4 +1,4 @@
-import { nquadsToNodes, legacyContext, stripPouch } from './rdf.js'
+import { nquadsToNodes, legacyContext, stripPouch, sameGraph } from './rdf.js'
 import { isProjectable } from './internal.js'
 import { docState } from './pouch.js'
 import { readProjection } from './projections.js'
@@ -10,7 +10,13 @@ const CREATED_BY = 'https://solidstate.rdf.systems/createdBy'
 // context) to one resource per node. Nodes this device lacks are imported and
 // every node is projected. Only when all of them are in the pod is the old
 // resource archived (same triples, private) and deleted.
-export const migrateLegacy = async ({ db, pod, rootUrl, legacyUrl, archiveUrl, projector, emit = () => {} }) => {
+export const migrateLegacy = async ({ db, pod, rootUrl, legacyUrl, archiveUrl, projector, emit: rawEmit = () => {} }) => {
+  // A throwing listener must never abort a migration half way.
+  const emit = (...args) => {
+    try {
+      rawEmit(...args)
+    } catch {}
+  }
   const legacy = await pod.get(legacyUrl)
   if (!legacy) return { migrated: false, reason: 'no-legacy-graph' }
 
@@ -42,8 +48,21 @@ export const migrateLegacy = async ({ db, pod, rootUrl, legacyUrl, archiveUrl, p
     return { migrated: false, reason: 'pending', pending }
   }
 
+  // The archive is private only if the storage root's default access is
+  // owner-only (CSS's default). solidstate doesn't write ACLs; the app
+  // (thoughtloom P3) should set owner-only access on the archive container.
   await pod.ensurePath(rootUrl, containerOf(archiveUrl))
   await pod.put(archiveUrl, legacy.body, { overwrite: true })
+
+  // Without an ETag the delete can't be conditional, so check by hand that the
+  // original is still what we migrated.
+  if (!legacy.etag) {
+    const now = await pod.get(legacyUrl)
+    if (!now || (now.body !== legacy.body && !(await sameGraph(now.body, legacy.body)))) {
+      emit('migration-incomplete', { reason: 'legacy-changed' })
+      return { migrated: false, reason: 'legacy-changed' }
+    }
+  }
   const removed = await pod.remove(legacyUrl, { etag: legacy.etag })
   if (removed.conflict) {
     emit('migration-incomplete', { reason: 'legacy-changed' })

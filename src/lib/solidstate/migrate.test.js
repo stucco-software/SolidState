@@ -17,9 +17,9 @@ const legacyBody = [
   `<uuid:b> <${S}title> "B" .`,
 ].join('\n')
 
-const setup = async ({ legacy = true } = {}) => {
+const setup = async ({ legacy = true, wrapFetch = (f) => f } = {}) => {
   const pod = createFakePod()
-  const client = createPodClient(pod.fetch)
+  const client = createPodClient(wrapFetch(pod.fetch, pod))
   const legacyUrl = `${pod.origin}/thoughtloom/site`
   const archiveUrl = `${pod.storage}thoughtloom-archive/site-0.2.nq`
   const containerUrl = `${pod.storage}thoughtloom-data/site/`
@@ -28,7 +28,26 @@ const setup = async ({ legacy = true } = {}) => {
   const ev = events()
   const projector = createProjector({ db, pod: client, containerUrl, context: ctx, emit: ev.emit, retryBaseMs: 60000 })
   const run = () => migrateLegacy({ db, pod: client, rootUrl: pod.storage, legacyUrl, archiveUrl, projector, emit: ev.emit })
-  return { pod, db, ev, run, legacyUrl, archiveUrl, containerUrl, projector }
+  return { pod, db, ev, run, legacyUrl, archiveUrl, containerUrl, projector, client }
+}
+
+const stripEtag = (fetch) => async (u, i) => {
+  const res = await fetch(u, i)
+  const h = new Headers(res.headers)
+  h.delete('etag')
+  return new Response(res.body, { status: res.status, headers: h })
+}
+
+// Serve a different body for the nth GET of `url` (a concurrent writer).
+const changeOnSecondGet = (url, body) => (fetch) => {
+  let gets = 0
+  return async (u, i) => {
+    const res = await fetch(u, i)
+    if (u === url && (i?.method ?? 'GET') === 'GET' && ++gets === 2) {
+      return new Response(body, { status: res.status, headers: new Headers(res.headers) })
+    }
+    return res
+  }
 }
 
 describe('migrateLegacy', () => {
@@ -72,5 +91,59 @@ describe('migrateLegacy', () => {
     expect(pod.files.has(legacyUrl)).toBe(true)
     expect(pod.files.has(archiveUrl)).toBe(false)
     expect(ev.named('migration-incomplete')).toHaveLength(1)
+  })
+
+  it('deletes the original without an ETag when it is unchanged', async () => {
+    const { run, pod, legacyUrl, archiveUrl, projector } = await setup({ wrapFetch: stripEtag })
+    expect(await run()).toEqual({ migrated: true, count: 2 })
+    projector.stop()
+    expect(pod.files.has(legacyUrl)).toBe(false)
+    expect(pod.files.get(archiveUrl).body).toBe(legacyBody)
+  })
+
+  it('keeps the original when it changed and there is no ETag to guard the delete', async () => {
+    const { run, pod, ev, legacyUrl, archiveUrl, projector } = await setup({
+      wrapFetch: (f, p) =>
+        stripEtag(changeOnSecondGet(`${p.origin}/thoughtloom/site`, '<https://e.x/x> <https://e.x/y> "changed" .')(f)),
+    })
+    const result = await run()
+    projector.stop()
+    expect(result).toEqual({ migrated: false, reason: 'legacy-changed' })
+    expect(pod.files.has(legacyUrl)).toBe(true)
+    expect(pod.files.has(archiveUrl)).toBe(true)
+    expect(ev.named('migration-incomplete')[0]).toMatchObject({ reason: 'legacy-changed' })
+  })
+
+  it('keeps the original when the delete finds it changed (with an ETag)', async () => {
+    const { client, db, pod, ev, legacyUrl, archiveUrl, containerUrl, projector } = await setup()
+    const result = await migrateLegacy({
+      db, pod: { ...client, remove: async () => ({ conflict: true }) }, rootUrl: pod.storage,
+      legacyUrl, archiveUrl, projector, emit: ev.emit,
+    })
+    projector.stop()
+    expect(result).toEqual({ migrated: false, reason: 'legacy-changed' })
+    expect(pod.files.has(legacyUrl)).toBe(true)
+    expect(pod.files.has(archiveUrl)).toBe(true)
+    expect(ev.named('migration-incomplete')).toHaveLength(1)
+  })
+
+  it('reports a conflicted local node as pending', async () => {
+    const { run, db, pod, legacyUrl, projector } = await setup()
+    await db.put({ _id: 'a', '@id': 'a', title: 'A' })
+    await db.bulkDocs([{ _id: 'a', _rev: '1-zzzz', title: 'B' }], { new_edits: false })
+    const result = await run()
+    projector.stop()
+    expect(result).toMatchObject({ migrated: false, reason: 'pending' })
+    expect(result.pending).toContain('a')
+    expect(pod.files.has(legacyUrl)).toBe(true)
+  })
+
+  it('does not re-import a node deleted on this device', async () => {
+    const { run, db, projector } = await setup()
+    const { rev } = await db.put({ _id: 'a', '@id': 'a', title: 'A' })
+    await db.remove('a', rev)
+    expect(await run()).toMatchObject({ migrated: true })
+    projector.stop()
+    await expect(db.get('a')).rejects.toMatchObject({ status: 404 })
   })
 })
