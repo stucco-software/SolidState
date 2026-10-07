@@ -17,7 +17,7 @@ describe('internal ids', () => {
     expect(isProjectable(undefined)).toBe(false)
   })
 
-  it('lists a doc's revision history newest first', () => {
+  it('lists the revision history of a doc, newest first', () => {
     expect(revList({ _revisions: { start: 3, ids: ['c', 'b', 'a'] } })).toEqual(['3-c', '2-b', '1-a'])
   })
 })
