@@ -40,18 +40,20 @@ const withTimeout = (replication, ms) =>
 // Problems are reported as events, never thrown.
 export const createReplication = ({ db, remote, emit, catchUpTimeoutMs = 30_000 }) => {
   let live = null
-  let pulling = null
+  const pulling = new Set()
 
   const catchUp = async () => {
+    let pull = null
     try {
-      pulling = db.replicate.from(remote)
-      const result = await withTimeout(pulling, catchUpTimeoutMs)
+      pull = db.replicate.from(remote)
+      pulling.add(pull)
+      const result = await withTimeout(pull, catchUpTimeoutMs)
       return result?.status !== 'cancelled'
     } catch (error) {
       emit('sync-error', { stage: 'replication', error })
       return false
     } finally {
-      pulling = null
+      pulling.delete(pull)
     }
   }
 
@@ -59,17 +61,18 @@ export const createReplication = ({ db, remote, emit, catchUpTimeoutMs = 30_000 
     stop()
     live = db.sync(remote, { live: true, retry: true })
     // The combined feed's 'paused' carries no error; the directions' do.
-    let offline = false
-    const noteError = (error) => {
-      if (error) offline = true
-    }
-    live.push.on('paused', noteError)
-    live.pull.on('paused', noteError)
-    live.on('active', () => {
-      offline = false
-      emit('replication', { state: 'active' })
+    // Each direction's last 'paused' says whether it's down: after a retry
+    // that finds nothing to transfer there's no 'active', only a clean pause.
+    // (Registered before the combined listener, so they run first.)
+    const down = { push: false, pull: false }
+    live.push.on('paused', (error) => {
+      down.push = Boolean(error)
     })
-    live.on('paused', () => emit('replication', { state: offline ? 'offline' : 'idle' }))
+    live.pull.on('paused', (error) => {
+      down.pull = Boolean(error)
+    })
+    live.on('active', () => emit('replication', { state: 'active' }))
+    live.on('paused', () => emit('replication', { state: down.push || down.pull ? 'offline' : 'idle' }))
     // 'denied' passes { direction, doc }, not an Error.
     live.on('denied', (detail) => emit('sync-error', { stage: 'replication', error: new Error(`denied: ${detail?.doc?.id ?? 'a doc'}`) }))
     // An 'error' ends live sync (e.g. a 401 once the session expired); the
@@ -79,7 +82,7 @@ export const createReplication = ({ db, remote, emit, catchUpTimeoutMs = 30_000 
 
   // Also cancels a catch-up in progress, so dispose never waits on it.
   const stop = () => {
-    pulling?.cancel?.()
+    for (const pull of pulling) pull.cancel?.()
     live?.cancel()
     live = null
   }

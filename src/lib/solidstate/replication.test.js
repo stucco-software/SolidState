@@ -37,6 +37,10 @@ describe('replication', () => {
     const r = createReplication({ db, remote: broken, emit: ev.emit, catchUpTimeoutMs: 50 })
     expect(await r.catchUp()).toBe(false)
     expect(ev.named('sync-error')[0]).toMatchObject({ stage: 'replication' })
+    const hang = () => new Promise(() => {})
+    const slow = createReplication({ db, remote: remoteFor({ url: 'https://sync.invalid/db/x', fetch: hang }), emit: ev.emit, catchUpTimeoutMs: 50 })
+    expect(await slow.catchUp()).toBe(false)
+    expect(ev.named('sync-error')[1].error.message).toMatch(/timed out/)
   })
 
   it('reports offline when the server is unreachable', async () => {
@@ -48,6 +52,23 @@ describe('replication', () => {
     await vi.waitFor(() => expect(ev.named('replication').some((e) => e.state === 'offline')).toBe(true))
     r.stop()
   })
+
+  it('reports idle again once the server is back, with nothing to transfer', async () => {
+    const db = memoryDb()
+    const server = memoryDb()
+    const ev = events()
+    let down = true
+    for (const method of ['info', 'get', 'put', 'revsDiff', 'bulkDocs', 'bulkGet', 'allDocs']) {
+      const real = server[method].bind(server)
+      server[method] = (...args) => (down ? Promise.reject(Object.assign(new Error('offline'), { status: 0 })) : real(...args))
+    }
+    const r = createReplication({ db, remote: server, emit: ev.emit })
+    r.start()
+    await vi.waitFor(() => expect(ev.named('replication').at(-1)?.state).toBe('offline'))
+    down = false
+    await vi.waitFor(() => expect(ev.named('replication').at(-1)?.state).toBe('idle'), { timeout: 10_000 })
+    r.stop()
+  }, 15_000)
 
   it('stop cancels a catch-up in progress', async () => {
     const db = memoryDb()
@@ -66,9 +87,9 @@ describe('replication', () => {
       seen = options.headers
       throw new TypeError('stop here')
     }
-    await remoteFor({ url: 'https://sync.invalid/db/x', fetch: signing }).info().catch(() => {})
-    expect(seen).not.toBeInstanceOf(Headers)
-    expect(typeof seen).toBe('object')
+    await remoteFor({ url: 'https://sync.invalid/db/x', fetch: signing }).bulkDocs([{ _id: 'a' }]).catch(() => {})
+    expect(Object.getPrototypeOf(seen)).toBe(Object.prototype)
+    expect({ ...seen }).toMatchObject({ 'content-type': 'application/json', accept: 'application/json' })
   })
 
   it('remoteFor returns a given database, or builds an http one with the fetch', () => {
