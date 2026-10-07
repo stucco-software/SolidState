@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { memoryDb } from './test/helpers.js'
 import { docState } from './pouch.js'
+import { projectionId } from './internal.js'
 import { readProjection, writeProjection, dropProjection, listProjections } from './projections.js'
 
 describe('docState', () => {
@@ -27,5 +28,16 @@ describe('projection records', () => {
     expect(await readProjection(db, 'n1')).toBeNull()
     await writeProjection(db, 'n1', { rev: '3-d', etag: '"e4"' })
     expect(await readProjection(db, 'n1')).toMatchObject({ rev: '3-d' })
+  })
+})
+
+describe('projection records from two devices', () => {
+  it('a conflicted record keeps its winner and drops the rest', async () => {
+    const db = memoryDb()
+    await writeProjection(db, 'n1', { rev: '1-a', etag: '"e1"' })
+    await db.bulkDocs([{ _id: projectionId('n1'), _rev: '1-zzzz', rev: '1-a', etag: '"e1"' }], { new_edits: false })
+    expect((await db.get(projectionId('n1'), { conflicts: true }))._conflicts).toHaveLength(1)
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev: '1-a', etag: '"e1"' })
+    expect((await db.get(projectionId('n1'), { conflicts: true }))._conflicts).toBeUndefined()
   })
 })
