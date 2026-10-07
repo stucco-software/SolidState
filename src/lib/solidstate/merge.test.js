@@ -34,6 +34,14 @@ describe('threeWayMerge', () => {
   it('compares values structurally (arrays, objects, key order)', () => {
     const r = threeWayMerge({ m: { a: 1, b: 2 } }, { m: { b: 2, a: 1 } }, { m: { a: 1, b: 3 } })
     expect(r).toEqual({ merged: { m: { a: 1, b: 3 } }, clashes: [] })
+    const list = threeWayMerge({ m: [{ a: 1, b: 2 }] }, { m: [{ b: 2, a: 1 }] }, { m: [{ a: 1, b: 3 }] })
+    expect(list).toEqual({ merged: { m: [{ a: 1, b: 3 }] }, clashes: [] })
+  })
+
+  it('a deletion against a change is a clash, keeping mine (the deletion)', () => {
+    const { body, ...withoutBody } = base
+    const r = threeWayMerge(base, withoutBody, { ...base, body: 'Theirs' })
+    expect(r).toEqual({ merged: { '@id': 'a', title: 'Old', tags: ['x'] }, clashes: ['body'] })
   })
 
   it('without an ancestor, every differing field is a clash', () => {
