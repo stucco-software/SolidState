@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import SolidState from './index.js'
 import { createFakePod } from './test/fake-pod.js'
 import { nodeUrl } from './layout.js'
+import { memoryDb } from './test/helpers.js'
 
 // Lets one test make projector.start() fail after it has opened its live feed.
 const failure = vi.hoisted(() => ({ start: false, afterStart: null }))
@@ -18,6 +19,26 @@ vi.mock('./projector.js', async (importOriginal) => {
           await projector.start()
           if (failure.afterStart) return failure.afterStart()
           throw new Error('projectAll failed')
+        },
+      }
+    },
+  }
+})
+
+// Lets one test act just as a catch-up has finished.
+const hooks = vi.hoisted(() => ({ afterCatchUp: null }))
+vi.mock('./replication.js', async (importOriginal) => {
+  const real = await importOriginal()
+  return {
+    ...real,
+    createReplication: (options) => {
+      const replication = real.createReplication(options)
+      return {
+        ...replication,
+        catchUp: async () => {
+          const caughtUp = await replication.catchUp()
+          hooks.afterCatchUp?.()
+          return caughtUp
         },
       }
     },
@@ -209,6 +230,22 @@ describe('SolidState lifecycle', () => {
     await store.post({ '@id': 'late', title: 'x' })
     await new Promise((r) => setTimeout(r, 50))
     expect(pod.files.has(nodeUrl(containerUrl, 'late'))).toBe(false)
+  })
+
+  it('re-checks dispose after catching up from the sync server', async () => {
+    const pod = createFakePod()
+    const { store } = open(pod, { sync: { remote: memoryDb() } })
+    let requests = null
+    // dispose() lands just as a successful catch-up returns.
+    hooks.afterCatchUp = () => {
+      store.dispose()
+      requests = pod.log.length
+    }
+    const result = await store.ready
+    hooks.afterCatchUp = null
+    expect(result).toEqual({ ok: false, disposed: true })
+    // Nothing more: no pod import.
+    expect(pod.log.slice(requests)).toEqual([])
   })
 
   it('idle does nothing before start-up has succeeded', async () => {

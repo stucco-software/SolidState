@@ -61,8 +61,11 @@ describe('several devices through a sync server', () => {
     await Promise.all([a.ready, b.ready])
     await a.post({ '@id': 'n1', title: 'Once' })
     await a.idle()
+    // Any second write, even of the same content, would change the ETag.
+    const etag = pod.files.get(nodeUrl(containerUrl, 'n1')).etag
     await vi.waitFor(async () => expect(await b.get('n1')).not.toBeNull())
     await b.idle()
+    expect(pod.files.get(nodeUrl(containerUrl, 'n1')).etag).toBe(etag)
     expect(pod.files.get(nodeUrl(containerUrl, 'n1')).body).toContain('"Once"')
     expect(outside).toEqual([])
     await a.dispose()
@@ -206,5 +209,111 @@ describe('several devices through a sync server', () => {
     await s.idle()
     expect(seen).toEqual([])
     await s.dispose()
+  })
+})
+
+describe('store lifecycle with a sync server', () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  // A sync server that never answers; `reached` resolves on its first request.
+  const silent = () => {
+    let reach
+    const reached = new Promise((resolve) => { reach = resolve })
+    const fetch = () => {
+      reach()
+      return new Promise(() => {})
+    }
+    return { sync: { url: `https://sync.invalid/db/${crypto.randomUUID()}`, fetch }, reached }
+  }
+
+  it('does not compact a conflicted store (compaction would drop the merge base)', async () => {
+    const { device, server } = setup()
+    await server.bulkDocs(
+      [
+        { _id: 'n1', _rev: '1-base', '@id': 'n1', title: 'Base' },
+        { _id: 'n1', _rev: '2-aaaa', _revisions: { start: 2, ids: ['aaaa', 'base'] }, '@id': 'n1', title: 'From A' },
+        { _id: 'n1', _rev: '2-bbbb', _revisions: { start: 2, ids: ['bbbb', 'base'] }, '@id': 'n1', title: 'From B' },
+      ],
+      { new_edits: false },
+    )
+    const a = device('a')
+    const compacted = []
+    a.on('compacted', (e) => compacted.push(e))
+    expect((await a.ready).ok).toBe(true)
+    expect(await a.conflicts('n1')).not.toBeNull()
+    // dispose waits for a compaction in progress.
+    await a.dispose()
+    expect(compacted).toEqual([])
+  })
+
+  it('close() right after start-up waits for the compaction', async () => {
+    const { device } = setup()
+    const a = device('a')
+    const compacted = []
+    const errors = []
+    a.on('compacted', (e) => compacted.push(e))
+    a.on('sync-error', (e) => errors.push(e))
+    await a.post({ '@id': 'n1', title: 'x' })
+    expect((await a.ready).ok).toBe(true)
+    await a.close()
+    expect(compacted).toHaveLength(1)
+    await sleep(50)
+    expect(errors).toEqual([])
+  })
+
+  it('dispose during a catch-up that never returns resolves quickly', async () => {
+    const { device } = setup()
+    const { sync, reached } = silent()
+    const a = device('a', { sync })
+    await reached
+    const started = Date.now()
+    await a.dispose()
+    expect(Date.now() - started).toBeLessThan(1000)
+    expect(await a.ready).toEqual({ ok: false, disposed: true })
+  })
+
+  it('resync() during the catch-up does not cut it short', async () => {
+    const { device } = setup()
+    const { sync, reached } = silent()
+    const a = device('a', { sync })
+    await reached
+    a.resync()
+    expect(await Promise.race([a.ready, sleep(200).then(() => 'still catching up')])).toBe('still catching up')
+    await a.dispose()
+  })
+
+  it('after dispose, writes do not reach the server, even after resync()', async () => {
+    const { device, server } = setup()
+    const a = device('a')
+    expect((await a.ready).ok).toBe(true)
+    await a.dispose()
+    await a.post({ '@id': 'late', title: 'x' })
+    await sleep(100)
+    await expect(server.get('late')).rejects.toMatchObject({ status: 404 })
+    a.resync()
+    await a.post({ '@id': 'later', title: 'x' })
+    await sleep(100)
+    await expect(server.get('later')).rejects.toMatchObject({ status: 404 })
+  })
+
+  // Live replication starts once the projector is watching, at the end of
+  // start-up. Here the projector's start is held up (a slow PUT) to give
+  // replication started too early the time to show.
+  it('starts live replication only once the projector has started', async () => {
+    const { device, pod } = setup()
+    const order = []
+    const fetch = async (url, init) => {
+      if (init?.method === 'PUT' && String(url).endsWith('/n1')) {
+        await vi.waitFor(() => expect(order).toContain('replication'), { timeout: 300 }).catch(() => {})
+      }
+      return pod.fetch(url, init)
+    }
+    const a = device('a', { session: { info: { webId: pod.webId }, fetch } })
+    a.on('ready', () => order.push('ready'))
+    a.on('replication', () => order.push('replication'))
+    await a.post({ '@id': 'n1', title: 'x' })
+    expect((await a.ready).ok).toBe(true)
+    await vi.waitFor(() => expect(order).toContain('replication'))
+    expect(order[0]).toBe('ready')
+    await a.dispose()
   })
 })
