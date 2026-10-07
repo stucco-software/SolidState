@@ -1,13 +1,10 @@
 import { nodeToNQuads, sameGraph } from './rdf.js'
 import { nodeUrl } from './layout.js'
-import { isInternal, isProjectable } from './internal.js'
+import { isInternal, isProjectable, generation } from './internal.js'
 import { readProjection, writeProjection, dropProjection, listProjections } from './projections.js'
 import { resolveIfIdentical } from './conflicts.js'
 
 const MAX_DELAY = 5 * 60 * 1000
-
-// "3-abc" → 3: how many edits deep a revision is.
-const generation = (rev) => Number.parseInt(String(rev).split('-')[0], 10) || 0
 
 // Writes each node's winning revision to the pod as its own resource and
 // records what it wrote. `conflicted` and `outside-change` are re-emitted each

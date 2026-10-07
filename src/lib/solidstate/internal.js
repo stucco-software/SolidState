@@ -12,3 +12,6 @@ export const isInternal = (id) => typeof id === 'string' && id.startsWith(INTERN
 // none can be in the store; the check is defensive.)
 export const isProjectable = (id) =>
   typeof id === 'string' && id.length > 0 && !isInternal(id) && !id.startsWith('_:')
+
+// A PouchDB revision's generation: how many edits deep it is ("3-abc" → 3).
+export const generation = (rev) => Number.parseInt(String(rev).split('-')[0], 10) || 0

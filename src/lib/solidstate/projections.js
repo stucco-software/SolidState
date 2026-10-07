@@ -1,16 +1,24 @@
-import { projectionId, PROJECTION_PREFIX } from './internal.js'
+import { projectionId, PROJECTION_PREFIX, generation } from './internal.js'
 import { docState } from './pouch.js'
 
 // What the projector last wrote to the pod for a node: the node revision it
-// wrote, and the ETag the pod gave back. Two devices can record the same
-// projection; once replicated, the records conflict. They describe the same
-// pod resource, so the winner is kept and the rest dropped.
+// wrote, and the ETag the pod gave back. Two devices can each record a
+// projection; once replicated, the records conflict. The one naming the
+// newest node revision describes what's on the pod now, so it's kept (PouchDB's
+// own winner only breaks ties) and the rest are dropped.
 export const readProjection = async (db, id) => {
   const record = (await docState(db, projectionId(id), { conflicts: true })).doc
   if (!record?._conflicts?.length) return record
-  await db.bulkDocs(record._conflicts.map((rev) => ({ _id: record._id, _rev: rev, _deleted: true })))
   const { _conflicts, ...winner } = record
-  return winner
+  const others = await Promise.all(_conflicts.map((rev) => db.get(record._id, { rev })))
+  const newest = others.reduce((a, b) => (generation(b.rev) > generation(a.rev) ? b : a), winner)
+  let kept = winner
+  if (newest !== winner) {
+    const saved = await db.put({ ...winner, rev: newest.rev, etag: newest.etag })
+    kept = { ...winner, _rev: saved.rev, rev: newest.rev, etag: newest.etag }
+  }
+  await db.bulkDocs(_conflicts.map((rev) => ({ _id: record._id, _rev: rev, _deleted: true })))
+  return kept
 }
 
 // `rev` is the node doc's revision, not this record's own PouchDB `_rev`.
