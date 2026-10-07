@@ -43,23 +43,34 @@ export const conflicts = async (db, id, { remote } = {}) => {
 // the same doc reached two devices by different routes (one edited it, the
 // other imported the result), so they share no history; common when devices
 // upgrade from 0.3 onto a sync server. Resolves such a doc and returns true.
-export const resolveIfIdentical = async (db, id, options) => {
-  const c = await conflicts(db, id, options)
+// Ancestors don't matter here, so nothing is fetched from the sync server.
+export const resolveIfIdentical = async (db, id) => {
+  const c = await conflicts(db, id)
   if (!c) return false
   if (!c.others.every((other) => threeWayMerge(null, c.winner, other.doc).clashes.length === 0)) return false
-  await resolve(db, id, c.winner)
+  await resolve(db, id, c.winner, c)
   return true
 }
 
+const changed = () => Object.assign(new Error('the doc changed since its conflicts were read'), { status: 409, name: 'conflict' })
+
 // Saves `merged` as the doc's new revision on the winning branch and deletes
-// the losing branches, so the doc is no longer conflicted. Metadata in
-// `merged` is ignored.
-export const resolve = async (db, id, merged) => {
-  const winner = await db.get(id, { conflicts: true })
-  const { _id, _rev, _conflicts, _revisions, ...body } = merged
-  const saved = await db.put({ ...body, _id: id, _rev: winner._rev })
-  const losers = winner._conflicts ?? []
-  if (losers.length) await db.bulkDocs(losers.map((rev) => ({ _id: id, _rev: rev, _deleted: true })))
+// the losing branches, so the doc is no longer conflicted. `based` is the
+// conflicts() result the merge was made from: if any branch has moved since
+// (replication brought an edit the merge never saw), nothing is written and
+// a 409 is thrown; read the conflicts again and re-merge. Metadata (every
+// `_` field) in `merged` is ignored.
+export const resolve = async (db, id, merged, based) => {
+  const seen = [based.winner._rev, ...based.others.map((other) => other.doc._rev)]
+  const current = await db.get(id, { conflicts: true })
+  const leaves = [current._rev, ...(current._conflicts ?? [])]
+  if (leaves.length !== seen.length || leaves.some((rev) => !seen.includes(rev))) throw changed()
+  const body = Object.fromEntries(Object.entries(merged).filter(([key]) => !key.startsWith('_')))
+  const saved = await db.put({ ...body, _id: id, _rev: based.winner._rev })
+  const losers = based.others.map((other) => ({ _id: id, _rev: other.doc._rev, _deleted: true }))
+  // bulkDocs reports per-doc failures in its results rather than throwing.
+  const failed = (await db.bulkDocs(losers)).find((result) => result.error)
+  if (failed) throw failed.status === 409 ? changed() : Object.assign(new Error(failed.message ?? failed.reason), failed)
   return saved
 }
 

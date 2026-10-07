@@ -70,10 +70,35 @@ describe('conflicts', () => {
   it('resolve saves the merge and removes the losing branch', async () => {
     const { a } = await conflicted()
     expect(await hasConflicts(a)).toBe(true)
-    await resolve(a, 'x', { '@id': 'x', title: 'From A', body: 'From B', _rev: 'ignored' })
+    const c = await conflicts(a, 'x')
+    await resolve(a, 'x', { '@id': 'x', title: 'From A', body: 'From B', _rev: 'ignored', _deleted: true }, c)
     const doc = await a.get('x', { conflicts: true })
     expect(doc._conflicts).toBeUndefined()
     expect(doc).toMatchObject({ title: 'From A', body: 'From B' })
     expect(await hasConflicts(a)).toBe(false)
+  })
+
+  it('resolve removes every losing branch', async () => {
+    const { a } = await conflicted()
+    const c3 = memoryDb()
+    await c3.put({ _id: 'x', '@id': 'x', title: 'From C', body: 'Body' })
+    await c3.replicate.to(a)
+    const c = await conflicts(a, 'x')
+    expect(c.others).toHaveLength(2)
+    await resolve(a, 'x', { '@id': 'x', title: 'Merged' }, c)
+    expect((await a.get('x', { conflicts: true }))._conflicts).toBeUndefined()
+  })
+
+  it('resolve refuses, writing nothing, when a branch moved since the conflicts were read', async () => {
+    const { a, b } = await conflicted()
+    const c = await conflicts(a, 'x')
+    // An edit the merge never saw arrives by replication.
+    const mine = await b.get('x')
+    await b.put({ ...mine, extra: 'unseen' })
+    await b.replicate.to(a)
+    const before = await a.get('x', { conflicts: true })
+    await expect(resolve(a, 'x', { '@id': 'x', title: 'Merged' }, c)).rejects.toMatchObject({ status: 409 })
+    const after = await a.get('x', { conflicts: true })
+    expect([after._rev, ...after._conflicts].sort()).toEqual([before._rev, ...before._conflicts].sort())
   })
 })

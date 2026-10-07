@@ -18,7 +18,7 @@ const generation = (rev) => Number.parseInt(String(rev).split('-')[0], 10) || 0
 // 401/403 are permanent as far as the pod client is concerned (PodError marks
 // only 5xx/429 retryable). P3 handles session refresh and calls projectAll()
 // afterwards.
-export const createProjector = ({ db, pod, containerUrl, context, remote, emit = () => {}, retryBaseMs = 1000 }) => {
+export const createProjector = ({ db, pod, containerUrl, context, emit = () => {}, retryBaseMs = 1000 }) => {
   // A throwing listener must not break the projection chain.
   const safeEmit = (name, detail) => {
     try {
@@ -46,7 +46,7 @@ export const createProjector = ({ db, pod, containerUrl, context, remote, emit =
     if (doc._conflicts?.length) {
       // Identical branches aren't a conflict: resolve, and the change feed
       // brings the resolved doc straight back here.
-      if (await resolveIfIdentical(db, id, { remote })) return 'resolved'
+      if (await resolveIfIdentical(db, id)) return 'resolved'
       safeEmit('conflicted', { id })
       return 'conflicted'
     }
