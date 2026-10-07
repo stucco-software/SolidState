@@ -21,3 +21,7 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# LevelDB folders created by tests that use the default Node adapter
+/pod-connect
+/test-graph

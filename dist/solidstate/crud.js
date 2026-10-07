@@ -2,6 +2,7 @@ import {
   arrayify,
   difference
 } from './utils.js'
+import { isInternal } from './internal.js'
 
 export const post = db => async (doc) => {
   if (!doc['@id']) {
@@ -57,6 +58,7 @@ export const deleteStatements = db => async (id, remove) => {
 }
 
 export const getEntity = db => async (id) => {
+  if (isInternal(id)) return null
   try {
     let doc = await db.get(id)
     doc['@id'] = id
@@ -82,6 +84,7 @@ export const getAll = db => async () => {
   const docs = await db.allDocs({
     include_docs: true,
   })
+  docs.rows = docs.rows.filter(row => !isInternal(row.id))
   const nodes = docs2nodes(docs)
   return nodes
 }

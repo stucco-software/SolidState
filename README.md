@@ -4,7 +4,27 @@ A graph-based realtime replication engine for creating offline first multiplayer
 
 ## Usage
 
-See the docs
+```js
+import SolidState from 'solidstate-kv'
+
+const store = SolidState({
+  graph: 'thoughtloom/my-site',                      // PouchDB name
+  session: { info: { webId }, fetch: authFetch },    // omit for local-only
+  context: siteContext,                              // JSON-LD context for pod RDF
+  container: 'thoughtloom-data/my-site/',            // under the storage root
+  legacy: { archivePath: 'thoughtloom-archive/my-site-0.2.nq' }, // migrate a 0.2 graph
+})
+
+store.on('outside-change', ({ id }) => console.warn('pod copy changed elsewhere', id))
+const { ok, error } = await store.ready   // never rejects
+await store.post({ '@id': 'uuid:1', title: { en: 'Hello' } })
+await store.idle()          // everything written so far has reached the pod
+await store.close()         // on sign-out or when switching sites; await it before re-creating
+```
+
+Await `close()` before creating a new store with the same graph name. PouchDB shares one database connection per name, so a `close()` that finishes after the new store opens closes the new store's connection too.
+
+See CHANGELOG.md for the 0.3 changes and breaking changes.
 
 ## Development
 
