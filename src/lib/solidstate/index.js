@@ -77,16 +77,26 @@ const SolidState = (config) => {
     // With a sync server, catch up from it first: a fresh device gets every
     // doc and every projection record in one pull. The pod import below then
     // only fills in what the server lacked (a new server, a migration).
+    let caughtUp = true
     if (config.sync) {
       replication = createReplication({ db, remote, emit })
-      await replication.catchUp()
+      caughtUp = await replication.catchUp()
       if (disposed) return { ok: false, disposed: true }
     }
-    // Import first: a device upgrading after another device migrated adopts
-    // the pod copies instead of fighting them.
-    await importContainer({ db, pod, containerUrl, context, emit })
-    if (disposed) return { ok: false, disposed: true }
-    if (config.legacy) {
+    // If the server didn't answer, skip the import and the migration until a
+    // start that reaches it. Both give every node they add a revision of its
+    // own, which would collide with the server's copy once replication
+    // resumes, and the pod round trip isn't exact (a one-item array comes back
+    // as a plain value), so those would be real conflicts. The cost: a
+    // brand-new device stays empty until the server answers; live replication
+    // below brings everything then.
+    if (caughtUp) {
+      // Import first: a device upgrading after another device migrated adopts
+      // the pod copies instead of fighting them.
+      await importContainer({ db, pod, containerUrl, context, emit })
+      if (disposed) return { ok: false, disposed: true }
+    }
+    if (caughtUp && config.legacy) {
       // A failed migration must not switch pod sync off; it retries next start.
       try {
         const origin = `${new URL(info.webId).origin}/`
