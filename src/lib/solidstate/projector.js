@@ -2,8 +2,12 @@ import { nodeToNQuads, sameGraph } from './rdf.js'
 import { nodeUrl } from './layout.js'
 import { isInternal, isProjectable } from './internal.js'
 import { readProjection, writeProjection, dropProjection, listProjections } from './projections.js'
+import { resolveIfIdentical } from './conflicts.js'
 
 const MAX_DELAY = 5 * 60 * 1000
+
+// "3-abc" → 3: how many edits deep a revision is.
+const generation = (rev) => Number.parseInt(String(rev).split('-')[0], 10) || 0
 
 // Writes each node's winning revision to the pod as its own resource and
 // records what it wrote. `conflicted` and `outside-change` are re-emitted each
@@ -14,7 +18,7 @@ const MAX_DELAY = 5 * 60 * 1000
 // 401/403 are permanent as far as the pod client is concerned (PodError marks
 // only 5xx/429 retryable). P3 handles session refresh and calls projectAll()
 // afterwards.
-export const createProjector = ({ db, pod, containerUrl, context, emit = () => {}, retryBaseMs = 1000 }) => {
+export const createProjector = ({ db, pod, containerUrl, context, remote, emit = () => {}, retryBaseMs = 1000 }) => {
   // A throwing listener must not break the projection chain.
   const safeEmit = (name, detail) => {
     try {
@@ -40,6 +44,9 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     const id = doc._id
     if (!isProjectable(id)) return 'skipped'
     if (doc._conflicts?.length) {
+      // Identical branches aren't a conflict: resolve, and the change feed
+      // brings the resolved doc straight back here.
+      if (await resolveIfIdentical(db, id, { remote })) return 'resolved'
       safeEmit('conflicted', { id })
       return 'conflicted'
     }
@@ -56,6 +63,14 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       await dropProjection(db, id)
       safeEmit('projected', { id, deleted: true })
       return 'deleted'
+    }
+
+    // Another device projected a revision at least as deep as ours that we
+    // don't have yet: we're behind, and writing would roll the pod back. The
+    // newer doc is on its way by replication. (If that branch were lost the doc
+    // would wait here, but a deeper revision can't lose to a shallower one.)
+    if (projection && projection.rev !== doc._rev && generation(projection.rev) >= generation(doc._rev)) {
+      return 'behind'
     }
 
     if (projection?.rev === doc._rev) return 'unchanged'
