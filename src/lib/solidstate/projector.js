@@ -47,9 +47,10 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     const id = doc._id
     if (!isProjectable(id)) return 'skipped'
     if (doc._conflicts?.length) {
-      // Identical branches aren't a conflict: resolve, and the change feed
-      // brings the resolved doc straight back here.
-      if (await resolveIfIdentical(db, id)) return 'resolved'
+      // Identical branches aren't a conflict: resolve, then project the
+      // resolved doc now. The change feed would bring it back here too, but it
+      // isn't running yet during the migration.
+      if (await resolveIfIdentical(db, id)) return projectDoc(await current(id))
       safeEmit('conflicted', { id })
       return 'conflicted'
     }

@@ -204,6 +204,17 @@ describe('projector', () => {
     expect(pod.files.get(url('twin')).body).toContain('"Same"')
   })
 
+  // Without the change feed running (as during the migration), nothing else
+  // would bring the resolved doc back to be projected.
+  it('projects identical branches in the same run that resolves them', async () => {
+    const { pod, db, projector, url } = setup()
+    await db.put({ _id: 'twin', '@id': 'twin', title: 'Same' })
+    await db.bulkDocs([{ _id: 'twin', _rev: '1-zzzz', '@id': 'twin', title: 'Same' }], { new_edits: false })
+    expect(await projector.projectDoc(await db.get('twin', { conflicts: true }))).toBe('projected')
+    expect(pod.files.get(url('twin')).body).toContain('"Same"')
+    expect((await readProjection(db, 'twin')).rev).toBe((await db.get('twin'))._rev)
+  })
+
   it('does not roll the pod back when another device already projected a newer revision', async () => {
     const { pod, db, projector, url } = setup()
     await db.put({ _id: 'n1', '@id': 'n1', title: 'Old' })
