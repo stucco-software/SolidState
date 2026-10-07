@@ -200,16 +200,29 @@ describe('projector', () => {
     await projector.projectAll()
     await projector.projectAll()
     expect(ev.named('conflicted')).toEqual([])
+    expect((await db.get('twin', { conflicts: true }))._conflicts).toBeUndefined()
     expect(pod.files.get(url('twin')).body).toContain('"Same"')
   })
 
   it('does not roll the pod back when another device already projected a newer revision', async () => {
     const { pod, db, projector, url } = setup()
-    const { rev } = await db.put({ _id: 'n1', '@id': 'n1', title: 'Old' })
+    await db.put({ _id: 'n1', '@id': 'n1', title: 'Old' })
     await pod.fetch(url('n1'), { method: 'PUT', body: 'newer content from another device' })
     await writeProjection(db, 'n1', { rev: '2-other', etag: pod.files.get(url('n1')).etag })
     await projector.projectAll()
     expect(pod.files.get(url('n1')).body).toBe('newer content from another device')
-    expect(rev.startsWith('1-')).toBe(true)
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev: '2-other' })
+  })
+
+  it('does not overwrite a parallel edit of the same depth projected by another device', async () => {
+    const { pod, db, projector, url } = setup()
+    await db.bulkDocs(
+      [{ _id: 'n1', _rev: '2-bbbb', _revisions: { start: 2, ids: ['bbbb', 'xxxx'] }, '@id': 'n1', title: 'Ours' }],
+      { new_edits: false },
+    )
+    await pod.fetch(url('n1'), { method: 'PUT', body: 'parallel edit from another device' })
+    await writeProjection(db, 'n1', { rev: '2-aaaa', etag: pod.files.get(url('n1')).etag })
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toBe('parallel edit from another device')
   })
 })
