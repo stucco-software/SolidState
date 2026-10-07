@@ -100,6 +100,13 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       // we'd write: a crash between PUT and writeProjection, or (P2) another
       // device projecting the same revision. Adopt that copy.
       const remote = await pod.get(url)
+      // Gone, with the record changed or dropped since we read it: another
+      // device deleted the resource (and replication just brought its record),
+      // not an outside app. Project again with the fresh record.
+      if (!remote && (await readProjection(db, id))?._rev !== projection?._rev) {
+        enqueue(id)
+        return 'requeued'
+      }
       if (!remote || !(await sameGraph(remote.body, body))) {
         safeEmit('outside-change', { id, url })
         return 'outside-change'
