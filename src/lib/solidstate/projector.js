@@ -1,6 +1,6 @@
 import { nodeToNQuads, sameGraph } from './rdf.js'
 import { nodeUrl } from './layout.js'
-import { isInternal, isProjectable, generation } from './internal.js'
+import { isInternal, isProjectable, generation, revList } from './internal.js'
 import { readProjection, writeProjection, dropProjection, listProjections } from './projections.js'
 import { resolveIfIdentical } from './conflicts.js'
 
@@ -37,6 +37,12 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     }
   }
 
+  // Whether `rev` is anywhere in this device's history of the doc.
+  const seen = async (id, rev) => {
+    const leaves = await db.get(id, { open_revs: 'all', revs: true })
+    return leaves.some(({ ok }) => ok && revList(ok).includes(rev))
+  }
+
   const projectDoc = async (doc) => {
     const id = doc._id
     if (!isProjectable(id)) return 'skipped'
@@ -63,10 +69,17 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     }
 
     // Another device projected a revision at least as deep as ours that we
-    // don't have yet: we're behind, and writing would roll the pod back. The
-    // newer doc is on its way by replication. (If that branch were lost the doc
-    // would wait here, but a deeper revision can't lose to a shallower one.)
-    if (projection && projection.rev !== doc._rev && generation(projection.rev) >= generation(doc._rev)) {
+    // have never seen: we're behind, and writing would roll the pod back. The
+    // newer doc is on its way by replication. Depth alone doesn't decide it: a
+    // deeper branch that ended in a delete loses to any live one, so a record
+    // naming a revision this device already has on some branch (live or
+    // deleted) is out of date, not ahead, and the winner is projected over it.
+    if (
+      projection &&
+      projection.rev !== doc._rev &&
+      generation(projection.rev) >= generation(doc._rev) &&
+      !(await seen(id, projection.rev))
+    ) {
       return 'behind'
     }
 

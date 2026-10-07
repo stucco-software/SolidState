@@ -15,3 +15,7 @@ export const isProjectable = (id) =>
 
 // A PouchDB revision's generation: how many edits deep it is ("3-abc" → 3).
 export const generation = (rev) => Number.parseInt(String(rev).split('-')[0], 10) || 0
+
+// A doc's revision history, newest first, as full revisions ("3-abc"). Needs
+// the doc read with { revs: true }.
+export const revList = (doc) => doc._revisions.ids.map((hash, i) => `${doc._revisions.start - i}-${hash}`)

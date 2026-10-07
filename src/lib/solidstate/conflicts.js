@@ -1,11 +1,10 @@
 import { threeWayMerge } from './merge.js'
+import { revList } from './internal.js'
 
 // Conflicts arise when two devices edit the same doc before replicating:
 // PouchDB keeps both revisions, picks a deterministic winner, and lists the
 // others in _conflicts. Nothing is lost; the app shows them and the user
 // merges (see merge.js).
-
-const revList = (doc) => doc._revisions.ids.map((hash, i) => `${doc._revisions.start - i}-${hash}`)
 
 const getOrNull = async (db, id, options) => {
   try {

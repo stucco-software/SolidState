@@ -225,4 +225,29 @@ describe('projector', () => {
     await projector.projectAll()
     expect(pod.files.get(url('n1')).body).toBe('parallel edit from another device')
   })
+
+  // A edited n1 to 2-aaaa and projected it, then deleted it (3-dddd) without
+  // the delete reaching the pod; B edited n1 to 2-bbbb. PouchDB prefers a live
+  // leaf over a deleted one, so 2-bbbb wins, unconflicted, though the record
+  // names the deeper-or-equal 2-aaaa. This device has seen 2-aaaa, so it isn't
+  // behind.
+  it('projects a winner that beat a deeper deleted branch it already knows', async () => {
+    const { pod, db, projector, url } = setup()
+    await db.bulkDocs(
+      [
+        { _id: 'n1', _rev: '2-aaaa', _revisions: { start: 2, ids: ['aaaa', 'base'] }, '@id': 'n1', title: 'A edit' },
+        { _id: 'n1', _rev: '3-dddd', _revisions: { start: 3, ids: ['dddd', 'aaaa', 'base'] }, _deleted: true },
+        { _id: 'n1', _rev: '2-bbbb', _revisions: { start: 2, ids: ['bbbb', 'base'] }, '@id': 'n1', title: 'B edit' },
+      ],
+      { new_edits: false },
+    )
+    const winner = await db.get('n1', { conflicts: true })
+    expect(winner).toMatchObject({ _rev: '2-bbbb', title: 'B edit' })
+    expect(winner._conflicts).toBeUndefined()
+    await pod.fetch(url('n1'), { method: 'PUT', body: await nodeToNQuads({ '@id': 'n1', title: 'A edit' }, ctx) })
+    await writeProjection(db, 'n1', { rev: '2-aaaa', etag: pod.files.get(url('n1')).etag })
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toContain('"B edit"')
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev: '2-bbbb' })
+  })
 })
