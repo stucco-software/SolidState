@@ -10,8 +10,10 @@ import { createProjector } from './projector.js'
 import { importContainer } from './importer.js'
 import { migrateLegacy } from './migrate.js'
 import { isInternal } from './internal.js'
+import { createReplication, remoteFor } from './replication.js'
+import { conflicts, resolve, hasConflicts } from './conflicts.js'
 
-export const VERSION = '0.3.0'
+export const VERSION = '0.4.0'
 
 // config:
 //   graph      PouchDB name; also the 0.2 resource path (relative to the WebID origin)
@@ -22,9 +24,14 @@ export const VERSION = '0.3.0'
 //   legacy     { path?, archivePath }: migrate a 0.2 graph at `<WebID origin>/<path ?? graph>`,
 //              archiving it to `<storage root>/<archivePath>`
 //   pouch      extra PouchDB constructor options (e.g. { adapter: 'memory' } in tests)
+//   sync       { url, fetch } (a CouchDB database through the sync server,
+//              fetch signs requests) or { remote: PouchDB } (tests). Devices
+//              replicate through it; only used with a session.
+//   compactOnStart  false to skip compacting the local database after start-up
 //
 // Events (store.on): ready, projected, conflicted, outside-change, migrated,
-// migration-incomplete, sync-error. ('sync-error', not 'error': an 'error'
+// migration-incomplete, replication ({ state: 'active' | 'idle' | 'offline' }),
+// compacted, sync-error. ('sync-error', not 'error': an 'error'
 // event with no listener throws in Node's EventEmitter.) A listener that
 // throws is swallowed so it can't break sync.
 //
@@ -51,6 +58,9 @@ const SolidState = (config) => {
   }
   const feeds = new Set()
   let projector = null
+  let replication = null
+  let remote = null
+  let compaction = Promise.resolve()
   let disposed = false
   let started = false
 
@@ -62,12 +72,31 @@ const SolidState = (config) => {
     const pod = createPodClient(fetch)
     await pod.ensurePath(rootUrl, containerUrl)
     if (disposed) return { ok: false, disposed: true }
+    remote = config.sync ? remoteFor(config.sync) : null
     projector = createProjector({ db, pod, containerUrl, context, emit })
-    // Import first: a device upgrading after another device migrated adopts
-    // the pod copies instead of fighting them.
-    await importContainer({ db, pod, containerUrl, context, emit })
-    if (disposed) return { ok: false, disposed: true }
-    if (config.legacy) {
+    // With a sync server, catch up from it first: a fresh device gets every
+    // doc and every projection record in one pull. The pod import below then
+    // only fills in what the server lacked (a new server, a migration).
+    let caughtUp = true
+    if (config.sync) {
+      replication = createReplication({ db, remote, emit })
+      caughtUp = await replication.catchUp()
+      if (disposed) return { ok: false, disposed: true }
+    }
+    // If the server didn't answer, skip the import and the migration until a
+    // start that reaches it. Both give every node they add a revision of its
+    // own, which would collide with the server's copy once replication
+    // resumes, and the pod round trip isn't exact (a one-item array comes back
+    // as a plain value), so those would be real conflicts. The cost: a
+    // brand-new device stays empty until the server answers; live replication
+    // below brings everything then.
+    if (caughtUp) {
+      // Import first: a device upgrading after another device migrated adopts
+      // the pod copies instead of fighting them.
+      await importContainer({ db, pod, containerUrl, context, emit })
+      if (disposed) return { ok: false, disposed: true }
+    }
+    if (caughtUp && config.legacy) {
       // A failed migration must not switch pod sync off; it retries next start.
       try {
         const origin = `${new URL(info.webId).origin}/`
@@ -88,6 +117,13 @@ const SolidState = (config) => {
       return { ok: false, disposed: true }
     }
     started = true
+    replication?.start()
+    // Old revisions add up; compact when nothing needs them for a merge.
+    if (config.compactOnStart !== false) {
+      compaction = hasConflicts(db)
+        .then((conflicted) => (conflicted ? null : db.compact().then(() => emit('compacted', {}))))
+        .catch((error) => emit('sync-error', { stage: 'compact', error }))
+    }
     emit('ready', { containerUrl })
     return { ok: true, containerUrl }
   }
@@ -96,6 +132,7 @@ const SolidState = (config) => {
     ? startPodSync().catch((error) => {
       // A failure inside projector.start() must not leave its live feed running.
       projector?.stop()
+      replication?.stop()
       emit('sync-error', { stage: 'start', error })
       return { ok: false, error }
     })
@@ -120,13 +157,17 @@ const SolidState = (config) => {
   const dispose = async () => {
     disposed = true
     projector?.stop()
+    replication?.stop()
     for (const feed of feeds) feed.cancel()
     feeds.clear()
     // Start-up may be mid-flight; wait for it to notice `disposed`, then make
     // sure a projector it created or started in the meantime is stopped.
     await ready
     projector?.stop()
+    replication?.stop()
     await projector?.idle()
+    // close() must not close the database under a running compaction.
+    await compaction
   }
 
   const close = async () => {
@@ -154,6 +195,13 @@ const SolidState = (config) => {
     },
     dispose,
     close,
+    conflicts: (id) => conflicts(db, id, { remote }),
+    // `based` is the conflicts(id) result the merge was made from; a 409
+    // means a branch moved since, so read the conflicts again.
+    resolve: (id, merged, based) => resolve(db, id, merged, based),
+    // Restart live replication, e.g. after signing in again (a 401 ends it).
+    // Not before start-up has finished, nor after dispose.
+    resync: () => { if (started && !disposed) replication?.start() },
     post: post(db),
     put: put(db),
     patch: patch(db),

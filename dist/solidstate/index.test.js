@@ -14,7 +14,7 @@ beforeEach(async () => {
 
 describe('lets test solidstate!', () => {
   it('constructs a datastore graph', () => {
-    expect(db.version).toBe("0.3.0")
+    expect(db.version).toBe("0.4.0")
     expect(typeof db.post).toBe("function")
     expect(typeof db.put).toBe("function")
     expect(typeof db.patch).toBe("function")

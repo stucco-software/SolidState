@@ -3,7 +3,7 @@ import { memoryDb, events } from './test/helpers.js'
 import { createFakePod } from './test/fake-pod.js'
 import { createPodClient } from './podClient.js'
 import { createProjector } from './projector.js'
-import { readProjection, writeProjection } from './projections.js'
+import { readProjection, writeProjection, dropProjection } from './projections.js'
 import { nodeUrl } from './layout.js'
 import { projectionId } from './internal.js'
 import { nodeToNQuads } from './rdf.js'
@@ -191,5 +191,117 @@ describe('projector', () => {
     expect(cancelled).toBe(1)
     projector.stop()
     expect(cancelled).toBe(2)
+  })
+
+  it('resolves a conflict between identical branches, then projects', async () => {
+    const { pod, db, ev, projector, url } = setup()
+    await db.put({ _id: 'twin', '@id': 'twin', title: 'Same' })
+    await db.bulkDocs([{ _id: 'twin', _rev: '1-zzzz', '@id': 'twin', title: 'Same' }], { new_edits: false })
+    await projector.projectAll()
+    await projector.projectAll()
+    expect(ev.named('conflicted')).toEqual([])
+    expect((await db.get('twin', { conflicts: true }))._conflicts).toBeUndefined()
+    expect(pod.files.get(url('twin')).body).toContain('"Same"')
+  })
+
+  // Without the change feed running (as during the migration), nothing else
+  // would bring the resolved doc back to be projected.
+  it('projects identical branches in the same run that resolves them', async () => {
+    const { pod, db, projector, url } = setup()
+    await db.put({ _id: 'twin', '@id': 'twin', title: 'Same' })
+    await db.bulkDocs([{ _id: 'twin', _rev: '1-zzzz', '@id': 'twin', title: 'Same' }], { new_edits: false })
+    expect(await projector.projectDoc(await db.get('twin', { conflicts: true }))).toBe('projected')
+    expect(pod.files.get(url('twin')).body).toContain('"Same"')
+    expect((await readProjection(db, 'twin')).rev).toBe((await db.get('twin'))._rev)
+  })
+
+  // Device A deleted n1 and removed its resource; this device (B) edited n1.
+  // A's dropped projection record arrives by replication while B's PUT is in
+  // flight, so the PUT 412s on a resource that's gone. Only solidstate
+  // devices touched it: B projects again with the fresh record instead.
+  it('re-projects instead of reporting an outside change when another device deleted the resource', async () => {
+    const pod = createFakePod()
+    const db = memoryDb()
+    const ev = events()
+    const containerUrl = `${pod.storage}data/site/`
+    const url = nodeUrl(containerUrl, 'n1')
+    let replicated = false
+    const fetch = async (u, init) => {
+      if (u === url && init?.method === 'PUT' && !replicated) {
+        replicated = true
+        await pod.fetch(url, { method: 'DELETE' })
+        await dropProjection(db, 'n1')
+      }
+      return pod.fetch(u, init)
+    }
+    const projector = createProjector({ db, pod: createPodClient(fetch), containerUrl, context: ctx, emit: ev.emit })
+    const first = await db.put({ _id: 'n1', '@id': 'n1', title: 'Before' })
+    await projector.projectAll()
+    replicated = false
+    await db.put({ _id: 'n1', _rev: first.rev, '@id': 'n1', title: 'B edit' })
+    await projector.projectAll()
+    await projector.idle()
+    expect(ev.named('outside-change')).toEqual([])
+    expect(pod.files.get(url).body).toContain('"B edit"')
+    expect((await readProjection(db, 'n1')).rev).toBe((await db.get('n1'))._rev)
+  })
+
+  it('still reports an outside change when the resource is gone but the record is as it was', async () => {
+    const { pod, db, ev, projector, url } = setup()
+    const first = await db.put({ _id: 'n1', '@id': 'n1', title: 'Before' })
+    await projector.projectAll()
+    await pod.fetch(url('n1'), { method: 'DELETE' })
+    await db.put({ _id: 'n1', _rev: first.rev, '@id': 'n1', title: 'After' })
+    await projector.projectAll()
+    await projector.idle()
+    expect(ev.named('outside-change')).toEqual([{ name: 'outside-change', id: 'n1', url: url('n1') }])
+    expect(pod.files.has(url('n1'))).toBe(false)
+  })
+
+  it('does not roll the pod back when another device already projected a newer revision', async () => {
+    const { pod, db, projector, url } = setup()
+    await db.put({ _id: 'n1', '@id': 'n1', title: 'Old' })
+    await pod.fetch(url('n1'), { method: 'PUT', body: 'newer content from another device' })
+    await writeProjection(db, 'n1', { rev: '2-other', etag: pod.files.get(url('n1')).etag })
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toBe('newer content from another device')
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev: '2-other' })
+  })
+
+  it('does not overwrite a parallel edit of the same depth projected by another device', async () => {
+    const { pod, db, projector, url } = setup()
+    await db.bulkDocs(
+      [{ _id: 'n1', _rev: '2-bbbb', _revisions: { start: 2, ids: ['bbbb', 'xxxx'] }, '@id': 'n1', title: 'Ours' }],
+      { new_edits: false },
+    )
+    await pod.fetch(url('n1'), { method: 'PUT', body: 'parallel edit from another device' })
+    await writeProjection(db, 'n1', { rev: '2-aaaa', etag: pod.files.get(url('n1')).etag })
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toBe('parallel edit from another device')
+  })
+
+  // A edited n1 to 2-aaaa and projected it, then deleted it (3-dddd) without
+  // the delete reaching the pod; B edited n1 to 2-bbbb. PouchDB prefers a live
+  // leaf over a deleted one, so 2-bbbb wins, unconflicted, though the record
+  // names the deeper-or-equal 2-aaaa. This device has seen 2-aaaa, so it isn't
+  // behind.
+  it('projects a winner that beat a deeper deleted branch it already knows', async () => {
+    const { pod, db, projector, url } = setup()
+    await db.bulkDocs(
+      [
+        { _id: 'n1', _rev: '2-aaaa', _revisions: { start: 2, ids: ['aaaa', 'base'] }, '@id': 'n1', title: 'A edit' },
+        { _id: 'n1', _rev: '3-dddd', _revisions: { start: 3, ids: ['dddd', 'aaaa', 'base'] }, _deleted: true },
+        { _id: 'n1', _rev: '2-bbbb', _revisions: { start: 2, ids: ['bbbb', 'base'] }, '@id': 'n1', title: 'B edit' },
+      ],
+      { new_edits: false },
+    )
+    const winner = await db.get('n1', { conflicts: true })
+    expect(winner).toMatchObject({ _rev: '2-bbbb', title: 'B edit' })
+    expect(winner._conflicts).toBeUndefined()
+    await pod.fetch(url('n1'), { method: 'PUT', body: await nodeToNQuads({ '@id': 'n1', title: 'A edit' }, ctx) })
+    await writeProjection(db, 'n1', { rev: '2-aaaa', etag: pod.files.get(url('n1')).etag })
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toContain('"B edit"')
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev: '2-bbbb' })
   })
 })

@@ -1,7 +1,8 @@
 import { nodeToNQuads, sameGraph } from './rdf.js'
 import { nodeUrl } from './layout.js'
-import { isInternal, isProjectable } from './internal.js'
+import { isInternal, isProjectable, generation, revList } from './internal.js'
 import { readProjection, writeProjection, dropProjection, listProjections } from './projections.js'
+import { resolveIfIdentical } from './conflicts.js'
 
 const MAX_DELAY = 5 * 60 * 1000
 
@@ -36,10 +37,20 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     }
   }
 
+  // Whether `rev` is anywhere in this device's history of the doc.
+  const seen = async (id, rev) => {
+    const leaves = await db.get(id, { open_revs: 'all', revs: true })
+    return leaves.some(({ ok }) => ok && revList(ok).includes(rev))
+  }
+
   const projectDoc = async (doc) => {
     const id = doc._id
     if (!isProjectable(id)) return 'skipped'
     if (doc._conflicts?.length) {
+      // Identical branches aren't a conflict: resolve, then project the
+      // resolved doc now. The change feed would bring it back here too, but it
+      // isn't running yet during the migration.
+      if (await resolveIfIdentical(db, id)) return projectDoc(await current(id))
       safeEmit('conflicted', { id })
       return 'conflicted'
     }
@@ -58,6 +69,21 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       return 'deleted'
     }
 
+    // Another device projected a revision at least as deep as ours that we
+    // have never seen: we're behind, and writing would roll the pod back. The
+    // newer doc is on its way by replication. Depth alone doesn't decide it: a
+    // deeper branch that ended in a delete loses to any live one, so a record
+    // naming a revision this device already has on some branch (live or
+    // deleted) is out of date, not ahead, and the winner is projected over it.
+    if (
+      projection &&
+      projection.rev !== doc._rev &&
+      generation(projection.rev) >= generation(doc._rev) &&
+      !(await seen(id, projection.rev))
+    ) {
+      return 'behind'
+    }
+
     if (projection?.rev === doc._rev) return 'unchanged'
     const body = await nodeToNQuads(doc, context)
     if (!body.trim()) {
@@ -74,6 +100,13 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       // we'd write: a crash between PUT and writeProjection, or (P2) another
       // device projecting the same revision. Adopt that copy.
       const remote = await pod.get(url)
+      // Gone, with the record changed or dropped since we read it: another
+      // device deleted the resource (and replication just brought its record),
+      // not an outside app. Project again with the fresh record.
+      if (!remote && (await readProjection(db, id))?._rev !== projection?._rev) {
+        enqueue(id)
+        return 'requeued'
+      }
       if (!remote || !(await sameGraph(remote.body, body))) {
         safeEmit('outside-change', { id, url })
         return 'outside-change'

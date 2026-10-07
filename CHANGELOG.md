@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.0
+
+- **Sync server** (`sync: { url, fetch }`): devices replicate through a
+  CouchDB database, so changes to docs other devices already have reach them.
+  Start-up catches up from the server first (a fresh device gets everything in
+  one pull), then imports from the pod only what the server lacked, then
+  replicates live both ways, retrying while offline. If the server can't be
+  reached at start-up, the pod import and 0.2 migration wait for a start that
+  reaches it (their copies would otherwise conflict with the server's).
+- **Conflicts:** `store.conflicts(id)` (each competing revision with its common
+  ancestor, or null after compaction) and `store.resolve(id, merged, based)`,
+  which refuses with a 409 if a branch moved since `based` was read.
+  `threeWayMerge(base, mine, theirs)` is exported: one-sided changes merge
+  automatically, and clashes are listed for the user. Branches with identical
+  content resolve themselves. Conflicted docs are not projected until
+  resolved. `store.resync()` restarts live replication (e.g. after signing in
+  again).
+- **Projection records replicate**, so a device doesn't re-upload another's
+  projection, and never rolls the pod back to an older revision; of duplicate
+  records from two devices, the one naming the newest revision is kept.
+- **Compaction** after start-up when nothing is conflicted (`compactOnStart:
+  false` turns it off). Events: `replication` (`active`/`idle`/`offline`),
+  `compacted`.
+- `store.version` reports the package version again (0.3.1 said 0.3.0).
+
 ## 0.3.1
 
 - Parse `\UXXXXXXXX` escapes in N-Quads. Servers (CSS among them) write

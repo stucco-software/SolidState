@@ -13,7 +13,7 @@ import { isInternal } from './internal.js'
 import { createReplication, remoteFor } from './replication.js'
 import { conflicts, resolve, hasConflicts } from './conflicts.js'
 
-export const VERSION = '0.3.0'
+export const VERSION = '0.4.0'
 
 // config:
 //   graph      PouchDB name; also the 0.2 resource path (relative to the WebID origin)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { projectionId, isInternal, isProjectable, PROJECTION_PREFIX } from './internal.js'
+import { projectionId, isInternal, isProjectable, PROJECTION_PREFIX, revList } from './internal.js'
 
 describe('internal ids', () => {
   it('prefixes projection docs', () => {
@@ -15,5 +15,9 @@ describe('internal ids', () => {
     expect(isProjectable('_:b0')).toBe(false)
     expect(isProjectable('')).toBe(false)
     expect(isProjectable(undefined)).toBe(false)
+  })
+
+  it('lists the revision history of a doc, newest first', () => {
+    expect(revList({ _revisions: { start: 3, ids: ['c', 'b', 'a'] } })).toEqual(['3-c', '2-b', '1-a'])
   })
 })

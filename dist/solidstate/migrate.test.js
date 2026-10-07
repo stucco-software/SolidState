@@ -138,6 +138,20 @@ describe('migrateLegacy', () => {
     expect(pod.files.has(legacyUrl)).toBe(true)
   })
 
+  // The device's own copy of a 0.2 node and the server's copy of the same
+  // node (another device migrated it first) share no history, so they
+  // conflict, but with identical content.
+  it('migrates a node whose branches are identical, not reporting it pending', async () => {
+    const { run, db, pod, ev, legacyUrl, projector } = await setup()
+    await db.put({ _id: 'a', '@id': 'a', title: 'A', mention: { url: 'https://x' } })
+    await db.bulkDocs([{ _id: 'a', _rev: '1-zzzz', '@id': 'a', title: 'A', mention: { url: 'https://x' } }], { new_edits: false })
+    const result = await run()
+    projector.stop()
+    expect(result).toEqual({ migrated: true, count: 2 })
+    expect(ev.named('migration-incomplete')).toEqual([])
+    expect(pod.files.has(legacyUrl)).toBe(false)
+  })
+
   it('does not re-import a node deleted on this device', async () => {
     const { run, db, projector } = await setup()
     const { rev } = await db.put({ _id: 'a', '@id': 'a', title: 'A' })

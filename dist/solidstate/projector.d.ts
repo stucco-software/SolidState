@@ -6,7 +6,7 @@ export function createProjector({ db, pod, containerUrl, context, emit, retryBas
     emit?: () => void;
     retryBaseMs?: number;
 }): {
-    projectDoc: (doc: any) => Promise<"deleted" | "skipped" | "conflicted" | "unchanged" | "outside-change" | "projected">;
+    projectDoc: (doc: any) => Promise<"deleted" | "skipped" | "conflicted" | "unchanged" | "outside-change" | "behind" | "requeued" | "projected">;
     projectAll: () => Promise<void>;
     start: () => Promise<void>;
     stop: () => void;
