@@ -2,9 +2,10 @@ import { projectionId, PROJECTION_PREFIX, generation } from './internal.js'
 import { docState } from './pouch.js'
 
 // What the projector last wrote to the pod for a node: the node revision it
-// wrote, and the ETag the pod gave back. Two devices can each record a
+// wrote, the ETag the pod gave back, and the container it wrote to (`target`;
+// records from before 0.6 have none). Two devices can each record a
 // projection; once replicated, the records conflict. The one naming the
-// newest node revision describes what's on the pod now, so it's kept (PouchDB's
+// newest node revision describes the last write, so it's kept whole (PouchDB's
 // own winner only breaks ties) and the rest are dropped.
 export const readProjection = async (db, id) => {
   const record = (await docState(db, projectionId(id), { conflicts: true })).doc
@@ -14,15 +15,17 @@ export const readProjection = async (db, id) => {
   const newest = others.reduce((a, b) => (generation(b.rev) > generation(a.rev) ? b : a), winner)
   let kept = winner
   if (newest !== winner) {
-    const saved = await db.put({ ...winner, rev: newest.rev, etag: newest.etag })
-    kept = { ...winner, _rev: saved.rev, rev: newest.rev, etag: newest.etag }
+    const { _id, _rev, ...fields } = newest
+    const saved = await db.put({ ...fields, _id: winner._id, _rev: winner._rev })
+    kept = { ...fields, _id: winner._id, _rev: saved.rev }
   }
   await db.bulkDocs(_conflicts.map((rev) => ({ _id: record._id, _rev: rev, _deleted: true })))
   return kept
 }
 
 // `rev` is the node doc's revision, not this record's own PouchDB `_rev`.
-// Without a sync server the record also keeps (pull.js):
+// `target` is the container the node was written to. Without a sync server
+// the record also keeps (pull.js):
 //   base          the node as it last went to or came from the pod, in pod
 //                 shape: the ancestor for a three-way merge with a pod change
 //   listed        the container listing's modification time (ms) for it at
@@ -30,7 +33,7 @@ export const readProjection = async (db, id) => {
 //   listedSettled whether that time can't hide a later write (sub-second, or
 //                 whole seconds at least two seconds old)
 // Fields not given keep their previous value; pass null to clear one.
-const FIELDS = ['rev', 'etag', 'base', 'listed', 'listedSettled']
+const FIELDS = ['rev', 'etag', 'target', 'base', 'listed', 'listedSettled']
 export const writeProjection = async (db, id, fields) => {
   const previous = await readProjection(db, id)
   const record = { _id: projectionId(id), ...(previous ? { _rev: previous._rev } : {}) }
@@ -41,9 +44,60 @@ export const writeProjection = async (db, id, fields) => {
   await db.put(record)
 }
 
-export const dropProjection = async (db, id) => {
+// A record is for another container when the one it names isn't
+// `containerUrl`. Records from before 0.6 name none: they were written where
+// this device's store projected before it first ran 0.6 (`untargeted`, see
+// untargetedContainer). Until the store moves, that's `containerUrl`, so
+// upgrading re-projects nothing.
+export const forAnotherTarget = (record, containerUrl, untargeted = containerUrl) =>
+  Boolean(record) && (record.target ?? untargeted) !== containerUrl
+
+// Drops a node's record. The tombstone names the container whose copy was
+// deleted (`target`): devices projecting into another container still have
+// a copy to delete (see droppedElsewhere). Tombstone bodies replicate.
+export const dropProjection = async (db, id, { target } = {}) => {
   const previous = await readProjection(db, id)
-  if (previous) await db.remove(previous)
+  if (previous) await db.put({ _id: previous._id, _rev: previous._rev, _deleted: true, ...(target ? { target } : {}) })
+}
+
+// Whether a device projecting into another container than `containerUrl`
+// dropped this node's record: it deleted its own copy, and a copy in
+// `containerUrl` is left over. False while the record is live, and for a
+// tombstone naming `containerUrl`. A tombstone from before 0.6 names none and
+// counts as `untargeted`'s, like a record.
+export const droppedElsewhere = async (db, id, containerUrl, untargeted = containerUrl) => {
+  let leaves
+  try {
+    leaves = (await db.get(projectionId(id), { open_revs: 'all' })).map((leaf) => leaf.ok).filter(Boolean)
+  } catch (e) {
+    if (e.status === 404) return false
+    throw e
+  }
+  if (!leaves.length || leaves.some((leaf) => !leaf._deleted)) return false
+  const last = leaves.reduce((a, b) => (generation(b._rev) > generation(a._rev) ? b : a))
+  return forAnotherTarget(last, containerUrl, untargeted)
+}
+
+// Where this device's records from before 0.6 (which name no container) were
+// written: the container its store projected into when it first ran 0.6.
+// Before then every record went to the owner's pod (there was no `storage`
+// option, and only the owner synced a site). Kept in a _local doc, which
+// never replicates: each device remembers its own.
+const UNTARGETED = '_local/solidstate-untargeted'
+export const untargetedContainer = async (db, containerUrl) => {
+  try {
+    return (await db.get(UNTARGETED)).container
+  } catch (e) {
+    if (e.status !== 404) throw e
+  }
+  try {
+    await db.put({ _id: UNTARGETED, container: containerUrl })
+    return containerUrl
+  } catch (e) {
+    // Another store on this database got there first; its answer stands.
+    if (e.status !== 409) throw e
+    return (await db.get(UNTARGETED)).container
+  }
 }
 
 export const listProjections = async (db) => {
