@@ -4,7 +4,7 @@ import { createFakePod } from './test/fake-pod.js'
 import { createPodClient } from './podClient.js'
 import { createProjector } from './projector.js'
 import { importContainer } from './importer.js'
-import { readProjection } from './projections.js'
+import { readProjection, writeProjection, dropProjection } from './projections.js'
 import { nodeToNQuads } from './rdf.js'
 import { nodeUrl } from './layout.js'
 
@@ -26,7 +26,10 @@ describe('importContainer', () => {
     const { db, run, pod, client, containerUrl } = await setup([{ '@id': 'a', title: 'A' }, { '@id': 'uuid:b', title: 'B' }])
     expect(await run()).toEqual({ added: 2 })
     expect((await db.get('a')).title).toBe('A')
-    expect(await readProjection(db, 'uuid:b')).toMatchObject({ etag: pod.files.get(nodeUrl(containerUrl, 'uuid:b')).etag })
+    expect(await readProjection(db, 'uuid:b')).toMatchObject({
+      etag: pod.files.get(nodeUrl(containerUrl, 'uuid:b')).etag,
+      target: containerUrl,
+    })
     // Nothing is written straight back.
     const projector = createProjector({ db, pod: client, containerUrl, context: ctx })
     const putsBefore = pod.requests('PUT').length
@@ -44,11 +47,11 @@ describe('importContainer', () => {
   })
 
   it('adopts a local doc that was never projected when the pod copy matches', async () => {
-    const { db, run, ev } = await setup([{ '@id': 'a', title: 'A' }, { '@id': 'b', title: 'B' }])
+    const { db, run, ev, containerUrl } = await setup([{ '@id': 'a', title: 'A' }, { '@id': 'b', title: 'B' }])
     const { rev } = await db.put({ _id: 'a', '@id': 'a', title: 'A' })
     await db.put({ _id: 'b', '@id': 'b', title: 'Different' })
     await run()
-    expect(await readProjection(db, 'a')).toMatchObject({ rev })
+    expect(await readProjection(db, 'a')).toMatchObject({ rev, target: containerUrl })
     expect(await readProjection(db, 'b')).toBeNull()
     expect(ev.named('outside-change').map((e) => e.id)).toEqual(['b'])
   })
@@ -108,5 +111,39 @@ describe('importContainer', () => {
     const warnings = ev.named('sync-error').filter((e) => /no ETag/.test(e.error.message))
     expect(warnings).toHaveLength(1)
     expect(warnings[0].stage).toBe('import')
+  })
+
+  it('leaves a node whose record is for another container to the projector, with no outside change', async () => {
+    const OLD = 'https://old.test/data/site/'
+    const { db, client, run, ev, containerUrl } = await setup([{ '@id': 'moved', title: 'Pod' }, { '@id': 'from05', title: 'Pod' }])
+    for (const [id, target] of [['moved', OLD], ['from05', undefined]]) {
+      const { rev } = await db.put({ _id: id, '@id': id, title: 'Local' })
+      await writeProjection(db, id, { rev, etag: '"stale"', target })
+    }
+    expect(await run()).toEqual({ added: 0 })
+    // A record from before 0.6 is this container's: its stale ETag is an outside change.
+    expect(ev.named('outside-change').map((e) => e.id)).toEqual(['from05'])
+    expect((await db.get('moved')).title).toBe('Local')
+    expect(await readProjection(db, 'moved')).toMatchObject({ target: OLD })
+    // Once the store has moved from where it went, it's left to the projector too.
+    await importContainer({ db, pod: client, containerUrl, context: ctx, emit: ev.emit, untargeted: OLD })
+    expect(ev.named('outside-change').map((e) => e.id)).toEqual(['from05'])
+  })
+
+  it('deletes a leftover copy of a node deleted in another container', async () => {
+    const OLD = 'https://old.test/data/site/'
+    const { db, run, pod, containerUrl } = await setup([{ '@id': 'gone', title: 'G' }, { '@id': 'kept', title: 'K' }])
+    // Both were deleted on another device, which dropped their records. A
+    // tombstone from before 0.6 counts as this container's, so 'kept' stays,
+    // as the importer always did.
+    for (const [id, target] of [['gone', OLD], ['kept', undefined]]) {
+      const { rev } = await db.put({ _id: id, '@id': id, title: id })
+      await writeProjection(db, id, { rev, etag: '"e"', target })
+      await dropProjection(db, id, { target })
+      await db.remove(id, rev)
+    }
+    expect(await run()).toEqual({ added: 0 })
+    expect(pod.files.has(nodeUrl(containerUrl, 'gone'))).toBe(false)
+    expect(pod.files.has(nodeUrl(containerUrl, 'kept'))).toBe(true)
   })
 })
