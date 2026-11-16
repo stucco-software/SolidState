@@ -49,4 +49,15 @@ describe('fake pod', () => {
     expect(pod.files.get(url).etag).not.toBe(before)
     expect(await (await pod.fetch(url)).text()).toBe('b')
   })
+
+  it('answers every request for a forbidden URL with its status, and only that URL', async () => {
+    const pod = createFakePod()
+    const url = `${pod.storage}private/`
+    await pod.fetch(url, { method: 'PUT', body: '' })
+    pod.forbid(url, 401)
+    expect((await pod.fetch(url, { method: 'HEAD' })).status).toBe(401)
+    expect((await pod.fetch(`${url}child`, { method: 'PUT', body: 'x' })).status).toBe(201)
+    pod.forbid(url)
+    expect((await pod.fetch(url)).status).toBe(403)
+  })
 })

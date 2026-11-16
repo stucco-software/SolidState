@@ -34,6 +34,7 @@ export const createFakePod = ({
   const files = new Map()
   const log = []
   const failures = []
+  const forbidden = new Map()
   const hooks = []
   let counter = 0
   const nextEtag = () => (weakEtags ? `W/"e${++counter}"` : `"e${++counter}"`)
@@ -106,6 +107,7 @@ export const createFakePod = ({
       failure.times -= 1
       return respond(failure.status, 'injected failure', failure.headers)
     }
+    if (forbidden.has(url)) return respond(forbidden.get(url))
 
     const file = files.get(url)
     const ifMatch = ignoreIfMatch ? null : headers.get('if-match')
@@ -175,10 +177,13 @@ export const createFakePod = ({
   }
   // Make the next `times` requests with this method (and URL substring) fail.
   const failNext = (method, status, times = 1, match, headers = {}) => failures.push({ method, status, times, match, headers })
+  // Refuse every request for exactly `url`, as a pod does for a resource this
+  // agent has no access to. Resources below it stay reachable.
+  const forbid = (url, status = 403) => forbidden.set(url, status)
   // Run `fn` just before the next request with this method (and URL substring)
   // is answered: another writer sneaking in.
   const before = (method, match, fn) => hooks.push({ method, match, fn })
   const requests = (method, match) => log.filter((r) => r.method === method && (!match || r.url.includes(match)))
 
-  return { fetch, files, log, requests, webId, origin, storage, profileUrl, touch, remove, failNext, before }
+  return { fetch, files, log, requests, webId, origin, storage, profileUrl, touch, remove, failNext, before, forbid }
 }
