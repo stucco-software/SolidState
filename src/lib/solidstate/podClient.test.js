@@ -102,3 +102,73 @@ describe('pod client', () => {
     expect(pod.requests('HEAD').at(-1).headers.accept).toBe('application/n-quads')
   })
 })
+
+describe('pod client: what a pull needs', () => {
+  it('lists members with millisecond modification times (hikari)', async () => {
+    const { pod, client } = setup({ listModified: 'ms', containerEtagMoves: true })
+    const c = `${pod.storage}c/`
+    await client.put(`${c}a`, 'x')
+    await client.put(`${c}b`, 'y')
+    const { etag, date, members } = await client.listing(c)
+    expect(etag).toEqual(expect.any(String))
+    expect(date).toEqual(expect.any(Number))
+    expect(members.map((m) => m.url).sort()).toEqual([`${c}a`, `${c}b`])
+    for (const m of members) expect(m.modified).toMatchObject({ ms: expect.any(Number), precise: true })
+  })
+
+  it('lists whole-second times as imprecise', async () => {
+    const { pod, client } = setup({ listModified: 'seconds' })
+    const c = `${pod.storage}c/`
+    await client.put(`${c}a`, 'x')
+    const { members } = await client.listing(c)
+    expect(members[0].modified).toMatchObject({ precise: false })
+    expect(members[0].modified.ms % 1000).toBe(0)
+  })
+
+  it('follows Link rel="next" across pages', async () => {
+    const { pod, client } = setup({ pageSize: 2 })
+    const c = `${pod.storage}c/`
+    for (const n of ['a', 'b', 'c', 'd', 'e']) await client.put(`${c}${n}`, n)
+    expect((await client.list(c)).sort()).toEqual(['a', 'b', 'c', 'd', 'e'].map((n) => `${c}${n}`))
+  })
+
+  it('stat tells a missing resource from a server error', async () => {
+    const { pod, client } = setup()
+    expect(await client.stat(`${pod.storage}nope`)).toEqual({ exists: false, etag: null })
+    pod.failNext('HEAD', 503)
+    await expect(client.stat(`${pod.storage}nope`)).rejects.toBeInstanceOf(PodError)
+  })
+
+  it('carries Retry-After on a 429', async () => {
+    const { pod, client } = setup()
+    pod.failNext('GET', 429, 1, null, { 'retry-after': '30' })
+    const error = await client.get(`${pod.storage}x`).catch((e) => e)
+    expect(error.retryAfterMs).toBe(30000)
+  })
+
+  it('reads back after a write that carries no ETag, returning the body', async () => {
+    const { pod, client } = setup({ etagOnWrite: false })
+    const url = `${pod.storage}n`
+    const result = await client.put(url, 'mine')
+    expect(result).toEqual({ etag: pod.files.get(url).etag, body: 'mine' })
+  })
+
+  it('shows another write that landed before the read-back', async () => {
+    const { pod, client } = setup({ etagOnWrite: false })
+    const url = `${pod.storage}n`
+    pod.before('GET', '/n', () => pod.touch(url, 'theirs'))
+    expect((await client.put(url, 'mine')).body).toBe('theirs')
+  })
+
+  it('falls back to GET-compare-PUT when a server refuses weak ETags in If-Match', async () => {
+    const { pod, client } = setup({ weakEtags: true })
+    const url = `${pod.storage}n`
+    await client.put(url, 'a')
+    const etag = pod.files.get(url).etag
+    expect(etag.startsWith('W/')).toBe(true)
+    expect(await client.put(url, 'b', { etag })).toMatchObject({ etag: expect.any(String) })
+    expect(pod.files.get(url).body).toBe('b')
+    expect(await client.put(url, 'c', { etag })).toEqual({ conflict: true })
+    expect(pod.files.get(url).body).toBe('b')
+  })
+})

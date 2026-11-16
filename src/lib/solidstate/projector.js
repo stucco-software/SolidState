@@ -1,4 +1,4 @@
-import { nodeToNQuads, sameGraph } from './rdf.js'
+import { nodeToNQuads, nquadsToNode, sameGraph } from './rdf.js'
 import { nodeUrl } from './layout.js'
 import { isInternal, isProjectable, generation, revList } from './internal.js'
 import { readProjection, writeProjection, dropProjection, listProjections } from './projections.js'
@@ -15,7 +15,17 @@ const MAX_DELAY = 5 * 60 * 1000
 // 401/403 are permanent as far as the pod client is concerned (PodError marks
 // only 5xx/429 retryable). P3 handles session refresh and calls projectAll()
 // afterwards.
-export const createProjector = ({ db, pod, containerUrl, context, emit = () => {}, retryBaseMs = 1000 }) => {
+//
+// Without a sync server (`podOnly`), other devices share the pod directly, so
+// the projector records each write's `base` (for later merges), and a 412 or
+// a write overtaken by another before it could be read back goes to
+// `pullNode` (pull.js), which brings the other copy in, rather than being
+// reported as an outside change. `gate` is shared with the pull: a server's
+// Retry-After pauses both.
+export const createProjector = ({
+  db, pod, containerUrl, context, emit = () => {}, retryBaseMs = 1000,
+  podOnly = false, pullNode = async () => {}, gate = { pausedUntil: 0 },
+}) => {
   // A throwing listener must not break the projection chain.
   const safeEmit = (name, detail) => {
     try {
@@ -61,6 +71,10 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       if (!projection) return 'unchanged'
       const result = await pod.remove(url, { etag: projection.etag })
       if (result.conflict) {
+        if (podOnly) {
+          await pullNode(id)
+          return 'pulled'
+        }
         safeEmit('outside-change', { id, url })
         return 'outside-change'
       }
@@ -92,10 +106,28 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       error.retryable = false
       throw error
     }
+    // A record with no ETag (the server gives none, or a write of ours was
+    // overtaken) can't guard the PUT: check the pod still holds what we last
+    // wrote or read before writing over it.
+    if (podOnly && projection && !projection.etag) {
+      const remote = await pod.get(url)
+      const ours = projection.base ? await nodeToNQuads(projection.base, context) : null
+      if (remote && !(ours && (await sameGraph(remote.body, ours)))) {
+        await pullNode(id)
+        return 'pulled'
+      }
+    }
     // No projection record means this device never wrote the node: create it
     // (If-None-Match: *). Otherwise update against the recorded ETag.
     let result = await pod.put(url, body, { etag: projection?.etag, create: !projection })
-    if (result.conflict) {
+    if (result.conflict && podOnly) {
+      const remote = await pod.get(url)
+      if (!remote || !(await sameGraph(remote.body, body))) {
+        await pullNode(id)
+        return 'pulled'
+      }
+      result = { etag: remote.etag }
+    } else if (result.conflict) {
       // A 412 is an outside change unless the pod already holds exactly what
       // we'd write: a crash between PUT and writeProjection, or (P2) another
       // device projecting the same revision. Adopt that copy.
@@ -113,7 +145,21 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
       }
       result = { etag: remote.etag }
     }
-    await writeProjection(db, id, { rev: doc._rev, etag: result.etag })
+    // Read back after a write that carried no ETag: if it isn't what we
+    // wrote, another write landed in between, and its ETag isn't ours to
+    // record. Keep the record as it was, minus the ETag, and pull: that
+    // merges the other write with ours.
+    if (result.body !== undefined && !(await sameGraph(result.body, body))) {
+      if (podOnly) {
+        await writeProjection(db, id, { rev: projection?.rev ?? '0-none', etag: null })
+        await pullNode(id)
+        return 'pulled'
+      }
+      safeEmit('outside-change', { id, url })
+      return 'outside-change'
+    }
+    const base = podOnly ? await nquadsToNode(body, context, id) : undefined
+    await writeProjection(db, id, { rev: doc._rev, etag: result.etag, ...(base ? { base } : {}) })
     safeEmit('projected', { id })
     return 'projected'
   }
@@ -122,7 +168,9 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     if (stopped || retryTimers.has(id)) return
     const n = (attempts.get(id) ?? 0) + 1
     attempts.set(id, n)
-    const delay = Math.min(retryBaseMs * 2 ** (n - 1), MAX_DELAY)
+    // A server's Retry-After pauses everything that talks to it.
+    if (error?.retryAfterMs != null) gate.pausedUntil = Math.max(gate.pausedUntil, Date.now() + error.retryAfterMs)
+    const delay = Math.max(Math.min(retryBaseMs * 2 ** (n - 1), MAX_DELAY), gate.pausedUntil - Date.now())
     safeEmit('sync-error', { id, error, retryIn: delay })
     const timer = setTimeout(() => {
       retryTimers.delete(id)
@@ -135,6 +183,7 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
     if (stopped || !isProjectable(id)) return chain
     chain = chain.then(async () => {
       if (stopped) return
+      if (Date.now() < gate.pausedUntil) return retryLater(id, null)
       try {
         await projectDoc(await current(id))
         attempts.delete(id)
@@ -192,5 +241,13 @@ export const createProjector = ({ db, pod, containerUrl, context, emit = () => {
 
   const pendingRetries = () => retryTimers.size
 
-  return { projectDoc, projectAll, start, stop, idle, enqueue, pendingRetries }
+  // Run `fn` in the queue, between projections (a pull, so it never races
+  // one). Resolves to its result.
+  const run = (fn) => {
+    const result = chain.then(fn)
+    chain = result.then(() => {}, () => {})
+    return result
+  }
+
+  return { projectDoc, projectAll, start, stop, idle, enqueue, pendingRetries, run }
 }

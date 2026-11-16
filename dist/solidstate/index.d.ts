@@ -1,4 +1,4 @@
-export const VERSION: "0.4.0";
+export const VERSION: "0.5.0";
 export default SolidState;
 declare function SolidState(config: any): {
     version: string;
@@ -38,6 +38,7 @@ declare function SolidState(config: any): {
         }[];
     }>;
     resolve: (id: any, merged: any, based: any) => Promise<any>;
+    pull: (options?: {}) => Promise<any>;
     resync: () => void;
     post: (doc: any) => Promise<any>;
     put: (id: any, update: any) => Promise<any>;

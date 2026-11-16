@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0
+
+- **Devices sharing a pod without a sync server now sync.** Before, a device only imported nodes it had never seen, at start-up, and reported every other pod change as an outside change; after that, its own edits to such a node 412'd and stayed local, so two devices drifted apart node by node. Now `store.pull()` brings the pod's changes in: a node unchanged here fast-forwards to the pod's version; a node changed on both sides merges three ways (`threeWayMerge`), and clashing fields become a PouchDB conflict for the existing `conflicts`/`resolve` flow; a resource deleted elsewhere is deleted here, unless edited here (the edit wins and the resource is made again); a node another device made is added. Start-up runs a full pull instead of the import. A projection's 412 pulls that node and tries again, rather than reporting an outside change. New event: `pulled` (`{ id, how }`). With a sync server nothing changes and `pull()` does nothing.
+- **Cheap pulls on polite servers, working pulls on rude ones.** A pull uses the container's ETag once it has learnt that it moves with every child write (an idle pull is then one HEAD, as on hikari), then the listing's `dcterms:modified`/`stat:mtime` against each record's, then a HEAD per node, in rolling slices when given a `{ budget }`. What a server does is learnt per container and rechecked. Whole-second times are rechecked while they could still hide a write. A 429/503 `Retry-After` pauses pulls and projections. Weak ETags refused in `If-Match` fall back to GET-compare-PUT. Resources with no ETag are compared by content. Paged listings are followed (`Link: rel="next"`), and nothing is deleted on the strength of a listing alone: a HEAD must say 404 or 410.
+- **A write overtaken before its read-back is merged, not lost.** Servers that send no ETag on a write (hikari, CSS) are read back after a PUT; if another write landed in between, its ETag is no longer recorded as ours (0.4 did, and would never have pulled it). Without a sync server the node is pulled and merged; with one, it's reported as an outside change.
+- Projection records keep `base` (the node as last written to or read from the pod, the ancestor for merges; `conflicts()` falls back to it when compaction removed the real one) and `listed`/`listedSettled`, without a sync server. The pod client gains `listing()`, `stat()` and `PodError.retryAfterMs`.
+
+## 0.4.1
+
+- Read `pim:storage` from a profile served as a named graph
+  (`[{ '@id': …, '@graph': […] }]`). Servers (hikari among them) serve the
+  profile that way, and the JSON-LD walk only checked top-level nodes, so the
+  triple was missed and the storage root fell back to the WebID origin —
+  writing to the wrong place on servers that host storage elsewhere (hikari
+  keeps it under `/~/`, so pod writes answered 404).
+
 ## 0.4.0
 
 - **Sync server** (`sync: { url, fetch }`): devices replicate through a

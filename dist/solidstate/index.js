@@ -11,9 +11,10 @@ import { importContainer } from './importer.js'
 import { migrateLegacy } from './migrate.js'
 import { isInternal } from './internal.js'
 import { createReplication, remoteFor } from './replication.js'
+import { createPuller } from './pull.js'
 import { conflicts, resolve, hasConflicts } from './conflicts.js'
 
-export const VERSION = '0.4.0'
+export const VERSION = '0.5.0'
 
 // config:
 //   graph      PouchDB name; also the 0.2 resource path (relative to the WebID origin)
@@ -29,7 +30,7 @@ export const VERSION = '0.4.0'
 //              replicate through it; only used with a session.
 //   compactOnStart  false to skip compacting the local database after start-up
 //
-// Events (store.on): ready, projected, conflicted, outside-change, migrated,
+// Events (store.on): ready, projected, pulled ({ id, how }), conflicted, outside-change, migrated,
 // migration-incomplete, replication ({ state: 'active' | 'idle' | 'offline' }),
 // compacted, sync-error. ('sync-error', not 'error': an 'error'
 // event with no listener throws in Node's EventEmitter.) A listener that
@@ -58,6 +59,7 @@ const SolidState = (config) => {
   }
   const feeds = new Set()
   let projector = null
+  let puller = null
   let replication = null
   let remote = null
   let compaction = Promise.resolve()
@@ -73,7 +75,17 @@ const SolidState = (config) => {
     await pod.ensurePath(rootUrl, containerUrl)
     if (disposed) return { ok: false, disposed: true }
     remote = config.sync ? remoteFor(config.sync) : null
-    projector = createProjector({ db, pod, containerUrl, context, emit })
+    // Without a sync server, devices share the pod directly and pull each
+    // other's edits from it (pull.js).
+    const podOnly = !config.sync
+    const gate = { pausedUntil: 0 }
+    projector = createProjector({
+      db, pod, containerUrl, context, emit, podOnly, gate,
+      pullNode: (id) => puller.pullNode(id),
+    })
+    if (podOnly) {
+      puller = createPuller({ db, pod, containerUrl, context, emit, gate, enqueue: (id) => projector.enqueue(id) })
+    }
     // With a sync server, catch up from it first: a fresh device gets every
     // doc and every projection record in one pull. The pod import below then
     // only fills in what the server lacked (a new server, a migration).
@@ -92,8 +104,14 @@ const SolidState = (config) => {
     // below brings everything then.
     if (caughtUp) {
       // Import first: a device upgrading after another device migrated adopts
-      // the pod copies instead of fighting them.
-      await importContainer({ db, pod, containerUrl, context, emit })
+      // the pod copies instead of fighting them. Without a sync server, a
+      // full pull, which also brings in other devices' edits and deletes.
+      if (puller) {
+        const pulled = await puller.pull()
+        if (pulled.error) throw pulled.error
+      } else {
+        await importContainer({ db, pod, containerUrl, context, emit })
+      }
       if (disposed) return { ok: false, disposed: true }
     }
     if (caughtUp && config.legacy) {
@@ -199,6 +217,16 @@ const SolidState = (config) => {
     // `based` is the conflicts(id) result the merge was made from; a 409
     // means a branch moved since, so read the conflicts again.
     resolve: (id, merged, based) => resolve(db, id, merged, based),
+    // Without a sync server: bring other devices' edits in from the pod.
+    // { budget } caps per-node checks for a timed pull; omit it to check
+    // everything. Resolves to counts ({ added, updated, merged, conflicted,
+    // deleted, recreated, checked }, plus `skipped` when the container hadn't
+    // changed, `paused` while a server's Retry-After lasts). With a sync
+    // server, before start-up, or after dispose: all zeros.
+    pull: async (options = {}) => {
+      if (!puller || !started || disposed) return { added: 0, updated: 0, merged: 0, conflicted: 0, deleted: 0, recreated: 0, checked: 0 }
+      return projector.run(() => puller.pull(options))
+    },
     // Restart live replication, e.g. after signing in again (a 401 ends it).
     // Not before start-up has finished, nor after dispose.
     resync: () => { if (started && !disposed) replication?.start() },

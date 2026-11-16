@@ -21,6 +21,23 @@ describe('discoverStorageRoot', () => {
     expect(await discoverStorageRoot(pod.webId, pod.fetch)).toBe('https://s.example/')
   })
 
+  it('uses pim:storage from a JSON-LD profile served as a named graph', async () => {
+    // Some servers (hikari among them) serve the profile as one node whose
+    // nodes sit inside @graph, so a top-level-only walk misses the triple.
+    const pod = createFakePod()
+    pod.files.set(pod.profileUrl, {
+      body: JSON.stringify([{
+        '@id': pod.profileUrl,
+        '@graph': [{
+          '@id': pod.webId,
+          'http://www.w3.org/ns/pim/space#storage': { '@id': 'https://s.example/~/' },
+        }],
+      }]),
+      type: 'application/ld+json', etag: '"p"',
+    })
+    expect(await discoverStorageRoot(pod.webId, pod.fetch)).toBe('https://s.example/~/')
+  })
+
   it('falls back to the WebID origin', async () => {
     const pod = createFakePod({ advertiseStorage: false })
     expect(await discoverStorageRoot(pod.webId, pod.fetch)).toBe(`${pod.origin}/`)

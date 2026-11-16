@@ -22,9 +22,23 @@ export const readProjection = async (db, id) => {
 }
 
 // `rev` is the node doc's revision, not this record's own PouchDB `_rev`.
-export const writeProjection = async (db, id, { rev, etag }) => {
+// Without a sync server the record also keeps (pull.js):
+//   base          the node as it last went to or came from the pod, in pod
+//                 shape: the ancestor for a three-way merge with a pod change
+//   listed        the container listing's modification time (ms) for it at
+//                 the last pull
+//   listedSettled whether that time can't hide a later write (sub-second, or
+//                 whole seconds at least two seconds old)
+// Fields not given keep their previous value; pass null to clear one.
+const FIELDS = ['rev', 'etag', 'base', 'listed', 'listedSettled']
+export const writeProjection = async (db, id, fields) => {
   const previous = await readProjection(db, id)
-  await db.put({ _id: projectionId(id), ...(previous ? { _rev: previous._rev } : {}), rev, etag })
+  const record = { _id: projectionId(id), ...(previous ? { _rev: previous._rev } : {}) }
+  for (const field of FIELDS) {
+    const value = field in fields ? fields[field] : previous?.[field]
+    if (value !== undefined && value !== null) record[field] = value
+  }
+  await db.put(record)
 }
 
 export const dropProjection = async (db, id) => {

@@ -1,5 +1,6 @@
 import { threeWayMerge } from './merge.js'
 import { revList } from './internal.js'
+import { readProjection } from './projections.js'
 
 // Conflicts arise when two devices edit the same doc before replicating:
 // PouchDB keeps both revisions, picks a deterministic winner, and lists the
@@ -28,11 +29,19 @@ export const conflicts = async (db, id, { remote } = {}) => {
   const winnerRevs = revList(winner)
   const ancestor = async (rev) =>
     (await getOrNull(db, id, { rev })) ?? (remote ? await getOrNull(remote, id, { rev }).catch(() => null) : null)
+  // Without a sync server, a branch pulled from the pod forks from the
+  // projection record's revision, and the record keeps that revision's body
+  // as `base`: the ancestor when compaction has removed it here.
+  let recorded
+  const recordedBase = async () => {
+    if (recorded === undefined) recorded = (await readProjection(db, id))?.base ?? null
+    return recorded
+  }
   const others = []
   for (const rev of winner._conflicts) {
     const other = await db.get(id, { rev, revs: true })
     const ancestorRev = revList(other).find((r) => winnerRevs.includes(r))
-    const base = ancestorRev ? await ancestor(ancestorRev) : null
+    const base = (ancestorRev ? await ancestor(ancestorRev) : null) ?? (await recordedBase())
     others.push({ doc: strip(other), base: base ? strip(base) : null })
   }
   return { winner: strip(winner), others }

@@ -31,9 +31,15 @@ export const discoverStorageRoot = async (webId, fetch, { timeoutMs = 30000 } = 
   if (type.includes('json') || /^\s*[[{]/.test(body)) {
     try {
       // Flatten so pim:storage is found on any node, including nested ones.
+      // A profile served as a named graph ([{ '@id': …, '@graph': […] }])
+      // keeps its nodes inside @graph — flatten leaves that wrapper in place —
+      // so the walk has to reach into @graph too, or the triple is missed and
+      // the caller falls back to the WebID origin (wrong on servers that host
+      // storage elsewhere, e.g. under /~/).
+      const walk = (nodes) => nodes.flatMap((n) => [n, ...walk(n['@graph'] ?? [])])
       const flat = await jsonld.flatten(JSON.parse(body), null, { base: webId })
       const nodes = Array.isArray(flat) ? flat : (flat['@graph'] ?? [flat])
-      storage = nodes.flatMap((n) => n[PIM_STORAGE] ?? []).map((v) => v?.['@id']).find(Boolean) ?? null
+      storage = walk(nodes).flatMap((n) => n[PIM_STORAGE] ?? []).map((v) => v?.['@id']).find(Boolean) ?? null
     } catch {
       // Not JSON-LD after all; try the Turtle pattern below.
     }
