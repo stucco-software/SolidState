@@ -117,6 +117,14 @@ describe('pod client', () => {
     }
   })
 
+  // A root not in standard form ('https://pod.test:443/') would cut the
+  // container's path at the wrong place and create junk containers.
+  it('refuses a container that is not under the root, as written', async () => {
+    const { pod, client } = setup()
+    await expect(client.ensurePath('https://pod.test:443/', `${pod.storage}a/b/`)).rejects.toThrow(/not under/)
+    expect(pod.log).toEqual([])
+  })
+
   it('throws PodError with retryable set for 5xx', async () => {
     const { pod, client } = setup()
     pod.failNext('PUT', 503)

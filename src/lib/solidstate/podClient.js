@@ -197,6 +197,10 @@ export const createPodClient = (rawFetch, { timeoutMs = 30000 } = {}) => {
   // refuse the PUT with 401 or 403; that counts too. The container itself
   // must answer.
   const ensurePath = async (rootUrl, containerUrl) => {
+    // Both in standard form, or the cut below lands mid-segment.
+    if (!containerUrl.startsWith(rootUrl)) {
+      throw new Error(`ensurePath: ${containerUrl} is not under ${rootUrl}`)
+    }
     const segments = containerUrl.slice(rootUrl.length).split('/').filter(Boolean)
     let url = rootUrl
     for (const [i, segment] of segments.entries()) {

@@ -27,6 +27,7 @@ export const VERSION = '0.5.0'
 //              owner's when they aren't the signed-in person (default: the
 //              session WebID's, from its profile's pim:storage). The session
 //              still signs every request. Only used with a session.
+//              `legacy` still reads from the session WebID's origin, so never combine them.
 //   legacy     { path?, archivePath }: migrate a 0.2 graph at `<WebID origin>/<path ?? graph>`,
 //              archiving it to `<storage root>/<archivePath>`
 //   pouch      extra PouchDB constructor options (e.g. { adapter: 'memory' } in tests)
@@ -73,7 +74,10 @@ const SolidState = (config) => {
 
   const startPodSync = async () => {
     const { fetch, info } = config.session
-    const rootUrl = config.storage ? withSlash(config.storage) : await discoverStorageRoot(info.webId, fetch)
+    // In standard form, as discoverStorageRoot returns it: ensurePath cuts
+    // the container's URL at the root's length. Not resolved against
+    // anything, so a relative or invalid root fails start-up here.
+    const rootUrl = config.storage ? withSlash(new URL(config.storage).href) : await discoverStorageRoot(info.webId, fetch)
     const containerUrl = new URL(config.container ?? `solidstate/${config.graph}/`, rootUrl).href
     const context = config.context ?? legacyContext
     const pod = createPodClient(fetch)

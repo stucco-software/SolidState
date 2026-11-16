@@ -55,6 +55,58 @@ describe('the storage option', () => {
     await store.close()
   })
 
+  // Every container in the pod, so a junk one (`…/ghtloom-data/`) shows.
+  const containers = (pod) => [...pod.files.keys()].filter((url) => url.endsWith('/')).sort()
+
+  it('puts the root into standard form before using it', async () => {
+    for (const storage of ['https://ruth.test:443/', 'https://ruth.test/./', 'HTTPS://RUTH.TEST']) {
+      const { ruth, session } = twoPods()
+      const containerUrl = 'https://ruth.test/thoughtloom-data/hello/'
+      const store = open(session, { storage })
+      expect(await store.ready).toEqual({ ok: true, containerUrl })
+      await store.post({ '@id': 'n1', title: 'x' })
+      await store.idle()
+      expect(ruth.files.has(nodeUrl(containerUrl, 'n1'))).toBe(true)
+      expect(containers(ruth)).toEqual([
+        'https://ruth.test/', 'https://ruth.test/profile/',
+        'https://ruth.test/thoughtloom-data/', containerUrl,
+      ])
+      await store.close()
+    }
+  })
+
+  it('takes a root with a path, as Inrupt’s pods have', async () => {
+    for (const storage of ['https://ruth.test/abc123/', 'https://ruth.test/abc123', 'https://ruth.test:443/abc123/./']) {
+      const { ruth, session } = twoPods()
+      await ruth.fetch('https://ruth.test/abc123/', { method: 'PUT', body: '' })
+      const containerUrl = 'https://ruth.test/abc123/thoughtloom-data/hello/'
+      const store = open(session, { storage })
+      expect(await store.ready).toEqual({ ok: true, containerUrl })
+      await store.post({ '@id': 'n1', title: 'x' })
+      await store.idle()
+      expect(ruth.files.has(nodeUrl(containerUrl, 'n1'))).toBe(true)
+      expect(containers(ruth)).toEqual([
+        'https://ruth.test/', 'https://ruth.test/abc123/',
+        'https://ruth.test/abc123/thoughtloom-data/', containerUrl,
+        'https://ruth.test/profile/',
+      ])
+      await store.close()
+    }
+  })
+
+  it('fails start-up on a storage root that is not an absolute URL', async () => {
+    for (const storage of ['ruth.test/', '/abc123/', 'not a url']) {
+      const { nk, ruth, session } = twoPods()
+      const store = open(session, { storage })
+      const result = await store.ready
+      expect(result.ok).toBe(false)
+      expect(result.error.message).toMatch(/Invalid URL/)
+      expect(nk.log).toEqual([])
+      expect(ruth.log).toEqual([])
+      await store.close()
+    }
+  })
+
   it('starts for an editor who may reach only the site’s container', async () => {
     const { ruth, session } = twoPods()
     const containerUrl = `${ruth.storage}thoughtloom-data/hello/`
