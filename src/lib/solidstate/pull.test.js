@@ -4,6 +4,8 @@ import SolidState from '../index.js'
 import { createFakePod } from './test/fake-pod.js'
 import { memoryDb } from './test/helpers.js'
 import { nodeUrl } from './layout.js'
+import { readProjection, writeProjection, dropProjection } from './projections.js'
+import { nodeToNQuads } from './rdf.js'
 
 const ctx = { '@base': 'https://e.x/v/', '@vocab': '#' }
 
@@ -427,5 +429,82 @@ describe('pull, budgets and a trusted container ETag', () => {
     for (let i = 0; i < 4; i += 1) await b.pull({ budget: 1 })
     expect((await b.get('n3')).title).toBe('late')
     await s.done()
+  })
+})
+
+describe('pull, records for another container (the store moved)', () => {
+  const OLD = 'https://old.test/thoughtloom-data/site/'
+  const n = (id, title) => ({ '@id': id, title })
+
+  it('leaves those nodes to the projector: it deletes, merges and reports nothing', async () => {
+    const { pod, url, device, raw, done } = setup()
+    const db = raw('a')
+    // Projected into the old pod. 'kept' has a different copy here, left by an
+    // earlier, interrupted move; 'new' has none yet; 'deleted' was deleted on
+    // this device, and has a copy here.
+    for (const id of ['kept', 'new', 'deleted']) {
+      const { rev } = await db.put({ _id: id, ...n(id, `${id} here`) })
+      await writeProjection(db, id, { rev, etag: '"in-the-old-pod"', target: OLD, base: n(id, 'old') })
+      if (id === 'deleted') await db.remove(id, rev)
+    }
+    for (const id of ['kept', 'deleted']) {
+      await pod.fetch(url(id), { method: 'PUT', body: await nodeToNQuads(n(id, 'an earlier copy'), ctx) })
+    }
+    const a = device('a')
+    const pulled = []
+    const outside = []
+    a.on('pulled', (e) => pulled.push(e))
+    a.on('outside-change', (e) => outside.push(e))
+    expect((await a.ready).ok).toBe(true)
+    await a.idle()
+    expect(pulled).toEqual([])
+    expect(outside).toEqual([])
+    for (const id of ['kept', 'new']) {
+      expect((await a.get(id))?.title).toBe(`${id} here`)
+      expect(pod.files.get(url(id)).body).toContain(`"${id} here"`)
+    }
+    expect(await a.get('deleted')).toBeNull()
+    expect(pod.files.has(url('deleted'))).toBe(false)
+    await done()
+  })
+
+  it('deletes a leftover copy of a node deleted in another container, instead of adding it back', async () => {
+    const { pod, url, device, raw, containerUrl, done } = setup()
+    const db = raw('a')
+    // Both deleted on this device, their pod copies deleted and their records
+    // dropped: 'gone' in the old pod, 'remade' here (by 0.5, which names no
+    // container). Both have a copy here now.
+    for (const [id, target] of [['gone', OLD], ['remade', undefined]]) {
+      const { rev } = await db.put({ _id: id, ...n(id, id) })
+      await writeProjection(db, id, { rev, etag: '"e"', target })
+      await dropProjection(db, id, { target })
+      await db.remove(id, rev)
+      await pod.fetch(url(id), { method: 'PUT', body: await nodeToNQuads(n(id, id), ctx) })
+    }
+    const a = device('a')
+    expect((await a.ready).ok).toBe(true)
+    await a.idle()
+    // The copy of 'gone' is left over from before the store moved.
+    expect(pod.files.has(url('gone'))).toBe(false)
+    expect(await a.get('gone')).toBeNull()
+    // 'remade' was dropped here, so another device made it again (as in 0.5.0),
+    // and its new record names this container.
+    expect((await a.get('remade'))?.title).toBe('remade')
+    expect(await readProjection(db, 'remade')).toMatchObject({ target: containerUrl })
+    await done()
+  })
+
+  it('forgets what it learnt about another container', async () => {
+    const { pod, url, device, raw, containerUrl, done } = setup({ containerEtagMoves: true })
+    await pod.fetch(url('n1'), { method: 'PUT', body: await nodeToNQuads(n('n1', 'In the pod'), ctx) })
+    // What 0.5.0 learnt about the container the store used before: a trusted
+    // ETag, naming no container. This container's happens to be the same.
+    await raw('a').put({
+      _id: 'solidstate:pull', containerEtag: pod.files.get(containerUrl).etag, trust: 'trusted', confirmations: 2, pulls: 0, cursor: null,
+    })
+    const a = device('a')
+    expect((await a.ready).ok).toBe(true)
+    expect((await a.get('n1'))?.title).toBe('In the pod')
+    await done()
   })
 })

@@ -2,7 +2,9 @@ import { nquadsToNode, nodeToNQuads, sameGraph, stripPouch } from './rdf.js'
 import { idFromUrl, nodeUrl } from './layout.js'
 import { isProjectable, generation, revList, INTERNAL_PREFIX } from './internal.js'
 import { docState } from './pouch.js'
-import { readProjection, writeProjection, dropProjection, listProjections } from './projections.js'
+import {
+  readProjection, writeProjection, dropProjection, listProjections, forAnotherTarget, droppedElsewhere,
+} from './projections.js'
 import { threeWayMerge } from './merge.js'
 
 // Pull: bring other devices' edits from the pod into this PouchDB, for
@@ -19,6 +21,12 @@ import { threeWayMerge } from './merge.js'
 //
 // It doesn't matter whether the pod change came from another device or
 // another Solid app: the pod is the owned copy.
+//
+// A node whose record is for another container (the store moved here, and
+// the projector hasn't written the node yet) is the projector's: it writes
+// it here without preconditions. A deleted node whose record was dropped in
+// another container has a leftover copy here, which is deleted. Every record
+// the pull writes names this container.
 //
 // Finding what changed as cheaply as the server allows (spec section 7):
 //   1. the container's ETag, once learnt to move with every child write;
@@ -51,12 +59,19 @@ const revHash = async (etag, body) =>
 
 const zero = () => ({ added: 0, updated: 0, merged: 0, conflicted: 0, deleted: 0, recreated: 0, checked: 0 })
 
-export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, enqueue = () => {}, gate = { pausedUntil: 0 } }) => {
+export const createPuller = ({
+  db, pod, containerUrl, context, emit = () => {}, enqueue = () => {}, gate = { pausedUntil: 0 }, untargeted = containerUrl,
+}) => {
   const safeEmit = (name, detail) => {
     try {
       emit(name, detail)
     } catch {}
   }
+
+  // Every record the pull writes or drops names this container.
+  const write = (id, fields) => writeProjection(db, id, { ...fields, target: containerUrl })
+  const drop = (id) => dropProjection(db, id, { target: containerUrl })
+  const moved = (record) => forAnotherTarget(record, containerUrl, untargeted)
 
   // The node in pod shape: written to RDF and read back, so a comparison with
   // a pod copy only sees real differences (a one-item array comes back as a
@@ -66,13 +81,18 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
     return (await nquadsToNode(await nodeToNQuads(node, context), context, node['@id'])) ?? node
   }
 
+  // What a pull learns is about one container. A store that moved here (or a
+  // 0.5.0 state, which names none) starts again.
+  const fresh = () => ({ container: containerUrl, containerEtag: null, trust: 'unknown', confirmations: 0, pulls: 0, cursor: null })
   const readState = async () => {
+    let state
     try {
-      return await db.get(STATE_ID)
+      state = await db.get(STATE_ID)
     } catch (e) {
       if (e.status !== 404) throw e
-      return { _id: STATE_ID, containerEtag: null, trust: 'unknown', confirmations: 0, pulls: 0, cursor: null }
+      return { _id: STATE_ID, ...fresh() }
     }
+    return state.container === containerUrl ? state : { _id: STATE_ID, _rev: state._rev, ...fresh() }
   }
   const saveState = async (state) => {
     try {
@@ -116,7 +136,7 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
       if (state !== 'present') {
         const rev = await putOver(id, theirs)
         if (!rev) continue
-        await writeProjection(db, id, { rev, etag: remote.etag, base: theirs, ...listed })
+        await write(id, { rev, etag: remote.etag, base: theirs, ...listed })
         counts.updated += 1
         safeEmit('pulled', { id, how: 'fast-forward' })
         return
@@ -126,7 +146,7 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
       if (record && doc._rev === record.rev && !doc._conflicts?.length) {
         const rev = await putOver(id, theirs, doc._rev)
         if (!rev) continue
-        await writeProjection(db, id, { rev, etag: remote.etag, base: theirs, ...listed })
+        await write(id, { rev, etag: remote.etag, base: theirs, ...listed })
         counts.updated += 1
         safeEmit('pulled', { id, how: 'fast-forward' })
         return
@@ -144,7 +164,7 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
         // record keeps its old revision, and the projector writes the merge
         // over the pod copy (If-Match: its ETag).
         const podHasIt = threeWayMerge(null, merged, theirs).clashes.length === 0
-        await writeProjection(db, id, {
+        await write(id, {
           rev: podHasIt ? rev : record?.rev ?? NONE,
           etag: remote.etag,
           base: theirs,
@@ -169,7 +189,7 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
         [{ ...theirs, _id: id, _rev: `${start}-${hash}`, _revisions: { start, ids: [hash, ...ancestry] } }],
         { new_edits: false },
       )
-      await writeProjection(db, id, { rev: record?.rev ?? NONE, etag: remote.etag, ...listed })
+      await write(id, { rev: record?.rev ?? NONE, etag: remote.etag, ...listed })
       counts.conflicted += 1
       safeEmit('pulled', { id, how: 'conflicted' })
       enqueue(id)
@@ -188,12 +208,12 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
         if (e.status !== 409) throw e
         return gone(id, await readProjection(db, id), counts)
       }
-      await dropProjection(db, id)
+      await drop(id)
       counts.deleted += 1
       safeEmit('pulled', { id, how: 'deleted' })
       return
     }
-    await dropProjection(db, id)
+    await drop(id)
     if (state === 'present') {
       // Edited here since: the edit wins, and the projector creates it again.
       counts.recreated += 1
@@ -210,7 +230,7 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
     if (!node) return
     const rev = await putOver(id, node)
     if (!rev) return
-    await writeProjection(db, id, { rev, etag: remote.etag, base: node })
+    await write(id, { rev, etag: remote.etag, base: node })
     counts.added += 1
     safeEmit('pulled', { id, how: 'added' })
   }
@@ -222,7 +242,7 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
     const remote = await pod.get(url)
     if (!remote) return
     if (await sameGraph(remote.body, await nodeToNQuads(doc, context))) {
-      await writeProjection(db, id, { rev: doc._rev, etag: remote.etag, base: await podShape(doc) })
+      await write(id, { rev: doc._rev, etag: remote.etag, base: await podShape(doc) })
     } else {
       safeEmit('outside-change', { id, url })
     }
@@ -238,7 +258,7 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
       return true
     }
     if (etag && record.etag && etag === record.etag) {
-      if (Object.keys(listed).length) await writeProjection(db, id, listed)
+      if (Object.keys(listed).length) await write(id, listed)
       return false
     }
     const remote = await pod.get(url)
@@ -250,7 +270,7 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
     // just remember the new ETag.
     const ours = record.base ? await nodeToNQuads(record.base, context) : null
     if (ours && (await sameGraph(remote.body, ours))) {
-      await writeProjection(db, id, { etag: remote.etag, ...listed })
+      await write(id, { etag: remote.etag, ...listed })
       return false
     }
     await changed(id, url, record, remote, listed, counts)
@@ -311,6 +331,8 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
       // agrees (a truncated listing must not delete anything).
       for (const [id, record] of records) {
         if (listedIds.has(id)) continue
+        // Not written here yet: the projector's, not a delete from elsewhere.
+        if (moved(record)) continue
         const url = nodeUrl(containerUrl, id)
         try {
           if ((await pod.stat(url)).exists) continue
@@ -336,13 +358,19 @@ export const createPuller = ({ db, pod, containerUrl, context, emit = () => {}, 
         const url = member.url
         const record = records.get(id)
         try {
+          if (moved(record)) continue
           if (!record) {
             // Deleted here with no record: our delete reached the pod (that
             // dropped the record), so another device has made it again. A
-            // pending delete still has its record.
+            // pending delete still has its record. Unless the record was
+            // dropped in another container: then this copy is left over from
+            // before the store moved, and it goes.
             const { state: local, doc } = await docState(db, id)
             if (local === 'present') await unrecorded(id, url, doc)
-            else {
+            else if (await droppedElsewhere(db, id, containerUrl, untargeted)) {
+              sawChange = true
+              await pod.remove(url)
+            } else {
               sawChange = true
               await added(id, url, counts)
             }
