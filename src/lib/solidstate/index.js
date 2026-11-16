@@ -12,6 +12,7 @@ import { migrateLegacy } from './migrate.js'
 import { isInternal } from './internal.js'
 import { createReplication, remoteFor } from './replication.js'
 import { createPuller } from './pull.js'
+import { untargetedContainer } from './projections.js'
 import { conflicts, resolve, hasConflicts } from './conflicts.js'
 
 export const VERSION = '0.5.0'
@@ -78,17 +79,21 @@ const SolidState = (config) => {
     const pod = createPodClient(fetch)
     await pod.ensurePath(rootUrl, containerUrl)
     if (disposed) return { ok: false, disposed: true }
+    // Projection records from before 0.6 name no container. They went where
+    // this device's store projected when it first ran 0.6, which it
+    // remembers (projections.js). Until the store moves, that's here.
+    const untargeted = await untargetedContainer(db, containerUrl)
     remote = config.sync ? remoteFor(config.sync) : null
     // Without a sync server, devices share the pod directly and pull each
     // other's edits from it (pull.js).
     const podOnly = !config.sync
     const gate = { pausedUntil: 0 }
     projector = createProjector({
-      db, pod, containerUrl, context, emit, podOnly, gate,
+      db, pod, containerUrl, context, emit, podOnly, gate, untargeted,
       pullNode: (id) => puller.pullNode(id),
     })
     if (podOnly) {
-      puller = createPuller({ db, pod, containerUrl, context, emit, gate, enqueue: (id) => projector.enqueue(id) })
+      puller = createPuller({ db, pod, containerUrl, context, emit, gate, untargeted, enqueue: (id) => projector.enqueue(id) })
     }
     // With a sync server, catch up from it first: a fresh device gets every
     // doc and every projection record in one pull. The pod import below then
@@ -114,7 +119,7 @@ const SolidState = (config) => {
         const pulled = await puller.pull()
         if (pulled.error) throw pulled.error
       } else {
-        await importContainer({ db, pod, containerUrl, context, emit })
+        await importContainer({ db, pod, containerUrl, context, emit, untargeted })
       }
       if (disposed) return { ok: false, disposed: true }
     }
