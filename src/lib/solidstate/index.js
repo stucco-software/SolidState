@@ -4,7 +4,7 @@ import PouchDB from 'pouchdb'
 import EventEmitter from 'events'
 import { put, post, patch, clear, getEntity, getAll, deleteStatements, query } from './crud.js'
 import { legacyContext } from './rdf.js'
-import { discoverStorageRoot } from './storage.js'
+import { discoverStorageRoot, withSlash } from './storage.js'
 import { createPodClient } from './podClient.js'
 import { createProjector } from './projector.js'
 import { importContainer } from './importer.js'
@@ -22,6 +22,10 @@ export const VERSION = '0.5.0'
 //   context    JSON-LD context used to write and read pod RDF (default: the 0.2 context)
 //   container  pod path for this graph's node resources, relative to the storage root
 //              (default: `solidstate/<graph>/`)
+//   storage    storage root URL to project into and import from, e.g. a site
+//              owner's when they aren't the signed-in person (default: the
+//              session WebID's, from its profile's pim:storage). The session
+//              still signs every request. Only used with a session.
 //   legacy     { path?, archivePath }: migrate a 0.2 graph at `<WebID origin>/<path ?? graph>`,
 //              archiving it to `<storage root>/<archivePath>`
 //   pouch      extra PouchDB constructor options (e.g. { adapter: 'memory' } in tests)
@@ -68,7 +72,7 @@ const SolidState = (config) => {
 
   const startPodSync = async () => {
     const { fetch, info } = config.session
-    const rootUrl = await discoverStorageRoot(info.webId, fetch)
+    const rootUrl = config.storage ? withSlash(config.storage) : await discoverStorageRoot(info.webId, fetch)
     const containerUrl = new URL(config.container ?? `solidstate/${config.graph}/`, rootUrl).href
     const context = config.context ?? legacyContext
     const pod = createPodClient(fetch)

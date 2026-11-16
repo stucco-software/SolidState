@@ -1,7 +1,7 @@
 import jsonld from 'jsonld'
 
 const PIM_STORAGE = 'http://www.w3.org/ns/pim/space#storage'
-const withSlash = (url) => (url.endsWith('/') ? url : `${url}/`)
+export const withSlash = (url) => (url.endsWith('/') ? url : `${url}/`)
 
 // The pod's storage root for a WebID. Many servers (Inrupt among them) host
 // storage on a different origin from the WebID and advertise it as
