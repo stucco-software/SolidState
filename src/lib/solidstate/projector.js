@@ -1,8 +1,8 @@
 import { nodeToNQuads, nquadsToNode, sameGraph } from './rdf.js'
 import { nodeUrl } from './layout.js'
-import { isInternal, isProjectable, generation, revList } from './internal.js'
+import { isInternal, isProjectable } from './internal.js'
 import {
-  readProjection, writeProjection, dropProjection, listProjections, forAnotherTarget, droppedElsewhere,
+  readProjection, writeProjection, dropProjection, listProjections, forAnotherTarget, droppedElsewhere, behind,
 } from './projections.js'
 import { resolveIfIdentical } from './conflicts.js'
 
@@ -46,6 +46,9 @@ export const createProjector = ({
   let chain = Promise.resolve()
   const attempts = new Map()
   const retryTimers = new Map()
+  // Nodes the import suspected of outside changes: not written until they've
+  // been looked at again (see recheckOutside), then released.
+  const held = new Set()
 
   const current = async (id) => {
     try {
@@ -56,15 +59,10 @@ export const createProjector = ({
     }
   }
 
-  // Whether `rev` is anywhere in this device's history of the doc.
-  const seen = async (id, rev) => {
-    const leaves = await db.get(id, { open_revs: 'all', revs: true })
-    return leaves.some(({ ok }) => ok && revList(ok).includes(rev))
-  }
-
   const projectDoc = async (doc) => {
     const id = doc._id
     if (!isProjectable(id)) return 'skipped'
+    if (held.has(id)) return 'held'
     if (doc._conflicts?.length) {
       // Identical branches aren't a conflict: resolve, then project the
       // resolved doc now. The change feed would bring it back here too, but it
@@ -114,21 +112,11 @@ export const createProjector = ({
     }
 
     // Another device projected a revision at least as deep as ours that we
-    // have never seen: we're behind, and writing would roll the pod back. The
-    // newer doc is on its way by replication. Depth alone doesn't decide it: a
-    // deeper branch that ended in a delete loses to any live one, so a record
-    // naming a revision this device already has on some branch (live or
-    // deleted) is out of date, not ahead, and the winner is projected over it.
-    // This holds whichever container the record names: waiting for the newer
-    // doc never rolls this container back either.
-    if (
-      record &&
-      record.rev !== doc._rev &&
-      generation(record.rev) >= generation(doc._rev) &&
-      !(await seen(id, record.rev))
-    ) {
-      return 'behind'
-    }
+    // have never seen (see `behind`): writing would roll the pod back. The
+    // newer doc is on its way by replication. This holds whichever container
+    // the record names: waiting for the newer doc never rolls this container
+    // back either.
+    if (await behind(db, id, record, doc._rev)) return 'behind'
 
     if (projection?.rev === doc._rev) return 'unchanged'
     const body = await nodeToNQuads(doc, context)
@@ -282,5 +270,16 @@ export const createProjector = ({
     return result
   }
 
-  return { projectDoc, projectAll, start, stop, idle, enqueue, pendingRetries, run }
+  const hold = (ids) => {
+    for (const id of ids) held.add(id)
+  }
+
+  const release = (ids) => {
+    for (const id of ids) {
+      held.delete(id)
+      enqueue(id)
+    }
+  }
+
+  return { projectDoc, projectAll, start, stop, idle, enqueue, pendingRetries, run, hold, release }
 }

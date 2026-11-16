@@ -4,6 +4,8 @@ import SolidState, { threeWayMerge } from '../index.js'
 import { createFakePod } from './test/fake-pod.js'
 import { memoryDb } from './test/helpers.js'
 import { nodeUrl } from './layout.js'
+import { nodeToNQuads } from './rdf.js'
+import { readProjection } from './projections.js'
 
 const ctx = { '@base': 'https://e.x/v/', '@vocab': '#' }
 
@@ -209,6 +211,201 @@ describe('several devices through a sync server', () => {
     await s.idle()
     expect(seen).toEqual([])
     await s.dispose()
+  })
+})
+
+describe('outside changes at start-up', () => {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  // Device a is cut off from the server; the test carries its changes there,
+  // and so decides what device b has when b starts.
+  const twoDevices = () => {
+    const { device, pod, containerUrl, server } = setup()
+    const a = device('a', { sync: { remote: memoryDb() } })
+    // Never closed: memory databases share one connection per name.
+    const carry = (options) => new PouchDB(a.config.graph, { adapter: 'memory' }).replicate.to(server, options)
+    const graphB = a.config.graph.replace(/-a$/, '-b')
+    const url = nodeUrl(containerUrl, 'n1')
+    const outside = []
+    const errors = []
+    // b's pod fetch runs `onGet(n)` before its n-th GET of n1 (1: the import's
+    // look, 2: the re-check's) and counts its PUTs of n1.
+    const startB = (onGet = () => {}) => {
+      let gets = 0
+      const puts = { count: 0 }
+      const fetch = async (u, init = {}) => {
+        const method = init.method ?? 'GET'
+        if (String(u) === url && method === 'GET') await onGet(++gets)
+        if (String(u) === url && method === 'PUT') puts.count += 1
+        return pod.fetch(u, init)
+      }
+      const b = device('b', { session: { info: { webId: pod.webId }, fetch } })
+      b.on('outside-change', (e) => outside.push(e))
+      b.on('sync-error', (e) => errors.push(e))
+      return { b, puts }
+    }
+    return { device, pod, server, a, carry, graphB, url, outside, errors, startB }
+  }
+
+  // a's first revision and its record are on the server; a's second revision
+  // is on the pod.
+  const editedOnA = async (t) => {
+    await t.a.ready
+    await t.a.post({ '@id': 'n1', title: 'First' })
+    await t.a.idle()
+    await t.carry()
+    await t.a.put('n1', { title: 'Second' })
+    await t.a.idle()
+  }
+
+  // A crash between a PUT and its record leaves the pod holding this device's
+  // revision under an ETag it never recorded.
+  it('adopts a pod copy that holds this device’s revision, without a report', async () => {
+    const { device, pod, containerUrl } = setup()
+    const url = nodeUrl(containerUrl, 'n1')
+    const first = device('solo')
+    await first.ready
+    await first.post({ '@id': 'n1', title: 'First' })
+    await first.idle()
+    await first.close()
+    const db = new PouchDB(first.config.graph, { adapter: 'memory' })
+    const doc = await db.get('n1')
+    const { rev } = await db.put({ ...doc, title: 'Second' })
+    await pod.fetch(url, { method: 'PUT', body: await nodeToNQuads({ '@id': 'n1', title: 'Second' }, ctx) })
+    const puts = pod.requests('PUT').length
+    const again = device('solo')
+    const outside = []
+    again.on('outside-change', (e) => outside.push(e))
+    expect((await again.ready).ok).toBe(true)
+    await again.idle()
+    expect(outside).toEqual([])
+    expect(pod.requests('PUT')).toHaveLength(puts)
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev, etag: pod.files.get(url).etag })
+    await again.close()
+  })
+
+  it('waits for replication before reporting: another device’s edit and record arrive after the import', async () => {
+    const t = twoDevices()
+    await editedOnA(t)
+    // b starts with 'First'. a's edit and its record reach the server while
+    // b imports, so b's import finds the pod changed.
+    const { b } = t.startB(async (n) => {
+      if (n === 1) await t.carry()
+    })
+    // A listener that throws must not stop the re-check.
+    b.on('replication', () => {
+      throw new Error('a listener bug')
+    })
+    expect((await b.ready).ok).toBe(true)
+    await vi.waitFor(async () => expect((await b.get('n1'))?.title).toBe('Second'))
+    // Released after the re-check: b's next edit reaches the pod.
+    await b.put('n1', { title: 'Third' })
+    await vi.waitFor(() => expect(t.pod.files.get(t.url).body).toContain('"Third"'))
+    await b.close()
+    await t.a.close()
+    expect(t.outside).toEqual([])
+  })
+
+  it('holds a node with an unprojected local edit until the re-check', async () => {
+    const t = twoDevices()
+    await editedOnA(t)
+    // b got a's edit but not its record, then edited it offline.
+    await t.carry({ doc_ids: ['n1'] })
+    const bDb = new PouchDB(t.graphB, { adapter: 'memory' })
+    await bDb.replicate.from(t.server)
+    await bDb.put({ ...(await bDb.get('n1')), title: 'Third' })
+    // a's record reaches the server while b imports.
+    const { b } = t.startB(async (n) => {
+      if (n === 1) await t.carry()
+    })
+    expect((await b.ready).ok).toBe(true)
+    await vi.waitFor(() => expect(t.pod.files.get(t.url).body).toContain('"Third"'))
+    await b.close()
+    await t.a.close()
+    expect(t.outside).toEqual([])
+  })
+
+  it('holds a never-projected node until the re-check', async () => {
+    const t = twoDevices()
+    await t.a.ready
+    await t.a.post({ '@id': 'n1', title: 'First' })
+    await t.a.idle()
+    // a's first revision reaches the server without its record; a edits on.
+    await t.carry({ doc_ids: ['n1'] })
+    await t.a.put('n1', { title: 'Second' })
+    await t.a.idle()
+    const { b, puts } = t.startB(async (n) => {
+      if (n === 1) await t.carry()
+    })
+    expect((await b.ready).ok).toBe(true)
+    await vi.waitFor(async () => expect((await b.get('n1'))?.title).toBe('Second'))
+    await b.idle()
+    await b.close()
+    await t.a.close()
+    expect(puts.count).toBe(0)
+    expect(t.pod.files.get(t.url).body).toContain('"Second"')
+    expect(t.outside).toEqual([])
+  })
+
+  // a's revision reaches the server while b imports; its record never does.
+  // b's re-check finds its GET of the pod copy held at a gate.
+  const slowRecheck = async () => {
+    const t = twoDevices()
+    await editedOnA(t)
+    let reach
+    let open
+    const reached = new Promise((resolve) => { reach = resolve })
+    const gate = new Promise((resolve) => { open = resolve })
+    const { b, puts } = t.startB(async (n) => {
+      if (n === 1) await t.carry({ doc_ids: ['n1'] })
+      if (n === 2) {
+        reach()
+        await gate
+      }
+    })
+    expect((await b.ready).ok).toBe(true)
+    await reached
+    return { ...t, b, puts, open }
+  }
+
+  it('writes nothing of a held node while its re-check is slow, then projects the edit made meanwhile', async () => {
+    const { b, puts, open, pod, url, outside, a } = await slowRecheck()
+    await b.put('n1', { title: 'Third' })
+    await b.idle()
+    expect(puts.count).toBe(0)
+    open()
+    await vi.waitFor(() => expect(pod.files.get(url).body).toContain('"Third"'))
+    await b.close()
+    await a.close()
+    expect(outside).toEqual([])
+  })
+
+  it('close() waits for a re-check in progress', async () => {
+    const { b, open, errors, a } = await slowRecheck()
+    let closed = false
+    const closing = b.close().then(() => { closed = true })
+    await sleep(50)
+    expect(closed).toBe(false)
+    open()
+    await closing
+    await a.close()
+    expect(errors).toEqual([])
+  })
+
+  it('still reports a pod copy changed outside solidstate, once replication has caught up', async () => {
+    const { device, pod, containerUrl } = setup()
+    const a = device('a')
+    await a.ready
+    await a.post({ '@id': 'n1', title: 'Mine' })
+    await a.idle()
+    await a.close()
+    pod.touch(nodeUrl(containerUrl, 'n1'), '<https://e.x/v/n1> <https://e.x/v/#title> "Edited elsewhere" .')
+    const again = device('a')
+    const outside = []
+    again.on('outside-change', (e) => outside.push(e))
+    expect((await again.ready).ok).toBe(true)
+    await vi.waitFor(() => expect(outside).toEqual([{ id: 'n1', url: nodeUrl(containerUrl, 'n1') }]))
+    await again.close()
   })
 })
 

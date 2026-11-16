@@ -7,7 +7,7 @@ import { legacyContext } from './rdf.js'
 import { discoverStorageRoot, withSlash } from './storage.js'
 import { createPodClient } from './podClient.js'
 import { createProjector } from './projector.js'
-import { importContainer } from './importer.js'
+import { importContainer, recheckOutside } from './importer.js'
 import { migrateLegacy } from './migrate.js'
 import { isInternal } from './internal.js'
 import { createReplication, remoteFor } from './replication.js'
@@ -42,6 +42,12 @@ export const VERSION = '0.5.0'
 // event with no listener throws in Node's EventEmitter.) A listener that
 // throws is swallowed so it can't break sync.
 //
+// outside-change is reported once a pod copy differs in content from this
+// device's winning revision. With a sync server, start-up waits until live
+// replication has caught up before reporting, since the difference may be
+// another device's edit on its way. Without one, start-up pulls instead
+// (pull.js), which merges the difference.
+//
 // store.ready never rejects. It resolves to:
 //   { ok: true, containerUrl }   pod sync is running
 //   { ok: true, local: true }    no session: local-only
@@ -69,6 +75,9 @@ const SolidState = (config) => {
   let replication = null
   let remote = null
   let compaction = Promise.resolve()
+  let rechecking = Promise.resolve()
+  // Runs once, the first time live replication goes idle (see suspects).
+  let afterIdle = null
   let disposed = false
   let started = false
 
@@ -104,10 +113,20 @@ const SolidState = (config) => {
     // only fills in what the server lacked (a new server, a migration).
     let caughtUp = true
     if (config.sync) {
-      replication = createReplication({ db, remote, emit })
+      const onIdle = () => {
+        const run = afterIdle
+        afterIdle = null
+        run?.()
+      }
+      replication = createReplication({ db, remote, emit, onIdle })
       caughtUp = await replication.catchUp()
       if (disposed) return { ok: false, disposed: true }
     }
+    // With a sync server, a pod copy that looks changed at import may be
+    // another device's edit, its revision and record still on their way. The
+    // projector holds those nodes until they're looked at again, once
+    // replication has caught up.
+    const suspects = []
     // If the server didn't answer, skip the import and the migration until a
     // start that reaches it. Both give every node they add a revision of its
     // own, which would collide with the server's copy once replication
@@ -123,10 +142,11 @@ const SolidState = (config) => {
         const pulled = await puller.pull()
         if (pulled.error) throw pulled.error
       } else {
-        await importContainer({ db, pod, containerUrl, context, emit, untargeted })
+        await importContainer({ db, pod, containerUrl, context, emit, untargeted, outside: (id) => suspects.push(id) })
       }
       if (disposed) return { ok: false, disposed: true }
     }
+    projector.hold(suspects)
     if (caughtUp && config.legacy) {
       // A failed migration must not switch pod sync off; it retries next start.
       try {
@@ -148,6 +168,14 @@ const SolidState = (config) => {
       return { ok: false, disposed: true }
     }
     started = true
+    if (suspects.length) {
+      // Set before replication starts, so its first idle isn't missed.
+      afterIdle = () => {
+        if (disposed) return
+        rechecking = recheckOutside({ db, pod, containerUrl, context, ids: suspects, emit, untargeted })
+          .then(() => projector.release(suspects))
+      }
+    }
     replication?.start()
     // Old revisions add up; compact when nothing needs them for a merge.
     if (config.compactOnStart !== false) {
@@ -197,8 +225,10 @@ const SolidState = (config) => {
     projector?.stop()
     replication?.stop()
     await projector?.idle()
-    // close() must not close the database under a running compaction.
+    // close() must not close the database under a running compaction, or
+    // under the look again at suspected outside changes.
     await compaction
+    await rechecking
   }
 
   const close = async () => {

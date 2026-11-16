@@ -1,4 +1,4 @@
-import { projectionId, PROJECTION_PREFIX, generation } from './internal.js'
+import { projectionId, PROJECTION_PREFIX, generation, revList } from './internal.js'
 import { docState } from './pouch.js'
 
 // What the projector last wrote to the pod for a node: the node revision it
@@ -107,4 +107,15 @@ export const listProjections = async (db) => {
     include_docs: true,
   })
   return rows.map((row) => ({ ...row.doc, id: row.id.slice(PROJECTION_PREFIX.length) }))
+}
+
+// Whether `record` puts this device behind: another device recorded a
+// revision at least as deep as `rev` that this device has never seen. Depth
+// alone doesn't decide it: a deeper branch that ended in a delete loses to
+// any live one, so a revision this device has on some branch (live or
+// deleted) is out of date, not ahead.
+export const behind = async (db, id, record, rev) => {
+  if (!record || record.rev === rev || generation(record.rev) < generation(rev)) return false
+  const leaves = await db.get(id, { open_revs: 'all', revs: true })
+  return !leaves.some(({ ok }) => ok && revList(ok).includes(record.rev))
 }

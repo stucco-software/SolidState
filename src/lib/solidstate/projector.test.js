@@ -308,6 +308,18 @@ describe('projector', () => {
     expect(pod.files.get(url('n1')).body).toContain('"B edit"')
     expect(await readProjection(db, 'n1')).toMatchObject({ rev: '2-bbbb' })
   })
+
+  it('holds nodes until they are released, then projects them', async () => {
+    const { pod, db, projector, url } = setup()
+    await db.put({ _id: 'n1', '@id': 'n1', title: 'Held' })
+    projector.hold(['n1'])
+    await projector.projectAll()
+    expect(await projector.projectDoc(await db.get('n1', { conflicts: true }))).toBe('held')
+    expect(pod.requests('PUT')).toHaveLength(0)
+    projector.release(['n1'])
+    await projector.idle()
+    expect(pod.files.get(url('n1')).body).toContain('"Held"')
+  })
 })
 
 describe('projector with records for another container', () => {

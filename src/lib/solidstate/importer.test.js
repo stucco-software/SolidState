@@ -3,7 +3,7 @@ import { memoryDb, events } from './test/helpers.js'
 import { createFakePod } from './test/fake-pod.js'
 import { createPodClient } from './podClient.js'
 import { createProjector } from './projector.js'
-import { importContainer } from './importer.js'
+import { importContainer, recheckOutside } from './importer.js'
 import { readProjection, writeProjection, dropProjection } from './projections.js'
 import { nodeToNQuads } from './rdf.js'
 import { nodeUrl } from './layout.js'
@@ -145,5 +145,97 @@ describe('importContainer', () => {
     expect(await run()).toEqual({ added: 0 })
     expect(pod.files.has(nodeUrl(containerUrl, 'gone'))).toBe(false)
     expect(pod.files.has(nodeUrl(containerUrl, 'kept'))).toBe(true)
+  })
+
+  it('adopts a changed pod copy that holds this device’s revision, and reports only a real change', async () => {
+    const { db, run, ev, pod, containerUrl } = await setup([
+      { '@id': 'mine', title: 'Second' },
+      { '@id': 'mine05', title: 'Second' },
+      { '@id': 'theirs', title: 'Edited elsewhere' },
+    ])
+    // Another device's edit to 'mine' and 'mine05' has arrived here, but its
+    // projection record hasn't: the records still name the first revision.
+    for (const [id, target] of [['mine', containerUrl], ['mine05', undefined]]) {
+      const first = await db.put({ _id: id, '@id': id, title: 'First' })
+      await writeProjection(db, id, { rev: first.rev, etag: '"before"', target })
+      await db.put({ _id: id, _rev: first.rev, '@id': id, title: 'Second' })
+    }
+    const theirs = await db.put({ _id: 'theirs', '@id': 'theirs', title: 'First' })
+    await writeProjection(db, 'theirs', { rev: theirs.rev, etag: '"before"', target: containerUrl })
+    await run()
+    expect(ev.named('outside-change').map((e) => e.id)).toEqual(['theirs'])
+    for (const id of ['mine', 'mine05']) {
+      expect(await readProjection(db, id)).toMatchObject({
+        rev: (await db.get(id))._rev,
+        etag: pod.files.get(nodeUrl(containerUrl, id)).etag,
+        target: containerUrl,
+      })
+    }
+    expect((await readProjection(db, 'theirs')).etag).toBe('"before"')
+  })
+
+  it('hands a suspected outside change to `outside` instead of reporting it, when given', async () => {
+    const { db, client, ev, containerUrl } = await setup([{ '@id': 'a', title: 'Pod' }, { '@id': 'b', title: 'Pod' }])
+    const { rev } = await db.put({ _id: 'a', '@id': 'a', title: 'Local' })
+    await writeProjection(db, 'a', { rev, etag: '"before"', target: containerUrl })
+    await db.put({ _id: 'b', '@id': 'b', title: 'Never projected' })
+    const suspects = []
+    await importContainer({ db, pod: client, containerUrl, context: ctx, emit: ev.emit, outside: (id) => suspects.push(id) })
+    expect(suspects).toEqual(['a', 'b'])
+    expect(ev.named('outside-change')).toEqual([])
+  })
+
+  it('doesn’t adopt over a record naming a deeper revision this device hasn’t seen', async () => {
+    const { db, client, ev, containerUrl } = await setup([{ '@id': 'a', title: 'Same' }])
+    await db.put({ _id: 'a', '@id': 'a', title: 'Same' })
+    await writeProjection(db, 'a', { rev: '2-ffff', etag: '"before"', target: containerUrl })
+    const suspects = []
+    await importContainer({ db, pod: client, containerUrl, context: ctx, emit: ev.emit, outside: (id) => suspects.push(id) })
+    expect(suspects).toEqual(['a'])
+    expect(await readProjection(db, 'a')).toMatchObject({ rev: '2-ffff', etag: '"before"' })
+  })
+})
+
+describe('recheckOutside', () => {
+  it('reports only what still differs once replication has caught up', async () => {
+    const { db, client, ev, pod, containerUrl } = await setup([
+      { '@id': 'caught', title: 'New' },
+      { '@id': 'same', title: 'New' },
+      { '@id': 'fresh', title: 'New' },
+      { '@id': 'real', title: 'Edited elsewhere' },
+      { '@id': 'realFresh', title: 'Edited elsewhere' },
+    ])
+    const url = (id) => nodeUrl(containerUrl, id)
+    // The other device's record arrived after the import.
+    const caught = await db.put({ _id: 'caught', '@id': 'caught', title: 'New' })
+    await writeProjection(db, 'caught', { rev: caught.rev, etag: pod.files.get(url('caught')).etag, target: containerUrl })
+    // Its revision arrived; its record hasn't yet.
+    const old = await db.put({ _id: 'same', '@id': 'same', title: 'Old' })
+    await writeProjection(db, 'same', { rev: old.rev, etag: '"before"', target: containerUrl })
+    const same = await db.put({ _id: 'same', _rev: old.rev, '@id': 'same', title: 'New' })
+    // Never projected here, and the pod holds what this device has.
+    const fresh = await db.put({ _id: 'fresh', '@id': 'fresh', title: 'New' })
+    // Changed outside solidstate: recorded, and never projected here.
+    const real = await db.put({ _id: 'real', '@id': 'real', title: 'Local' })
+    await writeProjection(db, 'real', { rev: real.rev, etag: '"before"', target: containerUrl })
+    await db.put({ _id: 'realFresh', '@id': 'realFresh', title: 'Local' })
+    await recheckOutside({
+      db, pod: client, containerUrl, context: ctx, ids: ['caught', 'same', 'fresh', 'real', 'realFresh'], emit: ev.emit,
+    })
+    expect(ev.named('outside-change').map((e) => e.id)).toEqual(['real', 'realFresh'])
+    expect(await readProjection(db, 'same')).toMatchObject({ rev: same.rev, etag: pod.files.get(url('same')).etag })
+    expect(await readProjection(db, 'fresh')).toMatchObject({ rev: fresh.rev, etag: pod.files.get(url('fresh')).etag, target: containerUrl })
+  })
+
+  it('leaves conflicted nodes, and nodes behind another device’s record, to the projector', async () => {
+    const { db, client, ev, containerUrl } = await setup([{ '@id': 'split', title: 'Pod' }, { '@id': 'late', title: 'Pod' }])
+    await db.put({ _id: 'split', '@id': 'split', title: 'A' })
+    await db.bulkDocs([{ _id: 'split', _rev: '1-zzzz', '@id': 'split', title: 'B' }], { new_edits: false })
+    const { rev } = await db.put({ _id: 'late', '@id': 'late', title: 'Local' })
+    await writeProjection(db, 'late', { rev: '2-ffff', etag: '"before"', target: containerUrl })
+    await recheckOutside({ db, pod: client, containerUrl, context: ctx, ids: ['split', 'late'], emit: ev.emit })
+    expect(ev.named('outside-change')).toEqual([])
+    expect(await readProjection(db, 'late')).toMatchObject({ rev: '2-ffff' })
+    expect(rev.startsWith('1-')).toBe(true)
   })
 })

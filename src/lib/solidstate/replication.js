@@ -38,7 +38,10 @@ const withTimeout = (replication, ms) =>
 // one go, far faster than importing the pod resource by resource. start()
 // then keeps both directions live; PouchDB retries on its own while offline.
 // Problems are reported as events, never thrown.
-export const createReplication = ({ db, remote, emit, catchUpTimeoutMs = 30_000 }) => {
+// `onIdle` is called each time live replication has nothing left to
+// transfer. It's a direct hook, not an event: a store listener that throws
+// can't stop it.
+export const createReplication = ({ db, remote, emit, catchUpTimeoutMs = 30_000, onIdle = () => {} }) => {
   let live = null
   const pulling = new Set()
 
@@ -72,7 +75,11 @@ export const createReplication = ({ db, remote, emit, catchUpTimeoutMs = 30_000 
       down.pull = Boolean(error)
     })
     live.on('active', () => emit('replication', { state: 'active' }))
-    live.on('paused', () => emit('replication', { state: down.push || down.pull ? 'offline' : 'idle' }))
+    live.on('paused', () => {
+      const state = down.push || down.pull ? 'offline' : 'idle'
+      emit('replication', { state })
+      if (state === 'idle') onIdle()
+    })
     // 'denied' passes { direction, doc }, not an Error.
     live.on('denied', (detail) => emit('sync-error', { stage: 'replication', error: new Error(`denied: ${detail?.doc?.id ?? 'a doc'}`) }))
     // An 'error' ends live sync (e.g. a 401 once the session expired); the
