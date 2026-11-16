@@ -250,6 +250,31 @@ describe('projector', () => {
     expect((await readProjection(db, 'n1')).rev).toBe((await db.get('n1'))._rev)
   })
 
+  // Two devices projected the same revision, each before it saw the other's
+  // record. The pod keeps the second write's ETag; PouchDB's winning record
+  // (by hash) has the first's.
+  it('writes the next edit without a false outside change after two devices recorded one revision', async () => {
+    const { pod, db, ev, projector, url, containerUrl } = setup()
+    const first = await db.put({ _id: 'n1', '@id': 'n1', title: 'A' })
+    const body = await nodeToNQuads({ '@id': 'n1', title: 'A' }, ctx)
+    await pod.fetch(url('n1'), { method: 'PUT', body })
+    const lost = pod.files.get(url('n1')).etag
+    await pod.fetch(url('n1'), { method: 'PUT', body })
+    const landed = pod.files.get(url('n1')).etag
+    await db.bulkDocs(
+      [
+        { _id: projectionId('n1'), _rev: '1-aaaa', rev: first.rev, etag: landed, target: containerUrl },
+        { _id: projectionId('n1'), _rev: '1-zzzz', rev: first.rev, etag: lost, target: containerUrl },
+      ],
+      { new_edits: false },
+    )
+    await db.put({ _id: 'n1', _rev: first.rev, '@id': 'n1', title: 'B' })
+    await projector.projectAll()
+    expect(ev.named('outside-change')).toEqual([])
+    expect(pod.files.get(url('n1')).body).toContain('"B"')
+    expect(await readProjection(db, 'n1')).toMatchObject({ etag: pod.files.get(url('n1')).etag, target: containerUrl })
+  })
+
   it('still reports an outside change when the resource is gone but the record is as it was', async () => {
     const { pod, db, ev, projector, url } = setup()
     const first = await db.put({ _id: 'n1', '@id': 'n1', title: 'Before' })

@@ -33,6 +33,10 @@ const adoptIfSame = async ({ db, pod, containerUrl, context, id, url, local, rec
 //   container, is left over and deleted. The projector does the same for
 //   deletions that arrive live; this catches those that came in with the
 //   catch-up from the sync server, before the projector was watching.
+// - A record with no ETag (two devices projected the same revision, see
+//   readProjection) can't tell an outside change from this device's own
+//   write: its copy is adopted if it matches, never reported. The next write
+//   goes without a precondition.
 // - Nodes this device has but never projected (a device upgrading from 0.2
 //   after another device migrated) are adopted when the pod copy has the same
 //   triples, and reported as an outside change when it doesn't.
@@ -79,7 +83,7 @@ export const importContainer = async ({ db, pod, containerUrl, context, emit = (
           const etag = await pod.etag(url)
           if (etag && etag !== record.etag) {
             const found = await adoptIfSame({ db, pod, containerUrl, context, id, url, local, record })
-            if (found === 'changed' || found === 'behind') report(id, url)
+            if ((found === 'changed' || found === 'behind') && record.etag) report(id, url)
           }
           continue
         }
@@ -139,7 +143,8 @@ export const recheckOutside = async ({ db, pod, containerUrl, context, ids, emit
       }
       // No record (never projected here), or the pod's ETag isn't the
       // recorded one: compare content.
-      if ((await adoptIfSame({ db, pod, containerUrl, context, id, url, local, record })) === 'changed') {
+      const found = await adoptIfSame({ db, pod, containerUrl, context, id, url, local, record })
+      if (found === 'changed' && (!record || record.etag)) {
         safeEmit('outside-change', { id, url })
       }
     } catch (error) {

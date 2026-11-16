@@ -6,16 +6,26 @@ import { docState } from './pouch.js'
 // records from before 0.6 have none). Two devices can each record a
 // projection; once replicated, the records conflict. The one naming the
 // newest node revision describes the last write, so it's kept whole (PouchDB's
-// own winner only breaks ties) and the rest are dropped.
+// own winner only breaks ties) and the rest are dropped. Except one thing:
+// when another record names the same revision and container with a different
+// ETag, both devices wrote that revision there, and only the write that
+// landed last has the pod's ETag. Which one that was can't be told (PouchDB
+// picks its winner by hash), so the kept record has no ETag: the next write
+// goes without a precondition, and the import adopts the pod's ETag at start-up
+// if the content matches.
 export const readProjection = async (db, id) => {
   const record = (await docState(db, projectionId(id), { conflicts: true })).doc
   if (!record?._conflicts?.length) return record
   const { _conflicts, ...winner } = record
   const others = await Promise.all(_conflicts.map((rev) => db.get(record._id, { rev })))
   const newest = others.reduce((a, b) => (generation(b.rev) > generation(a.rev) ? b : a), winner)
+  const unsure = [winner, ...others].some(
+    (other) => other.rev === newest.rev && other.target === newest.target && other.etag !== newest.etag,
+  )
   let kept = winner
-  if (newest !== winner) {
+  if (newest !== winner || unsure) {
     const { _id, _rev, ...fields } = newest
+    if (unsure) delete fields.etag
     const saved = await db.put({ ...fields, _id: winner._id, _rev: winner._rev })
     kept = { ...fields, _id: winner._id, _rev: saved.rev }
   }

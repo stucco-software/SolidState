@@ -111,6 +111,45 @@ describe('projection targets', () => {
     expect(await db.get(projectionId('n1'))).toMatchObject({ rev: '5-new', etag: '"ruth5"', target: HERE })
   })
 
+  // Two devices wrote the same revision into one container, each unaware of
+  // the other's record. Only one ETag is the pod's, and PouchDB's winner is
+  // picked by hash, not by which write landed last: keep neither ETag.
+  it('of conflicting records for the same revision and container, keeps neither ETag', async () => {
+    for (const [first, second] of [['"a"', '"b"'], ['"b"', '"a"'], ['"a"', undefined]]) {
+      const db = memoryDb()
+      await db.bulkDocs(
+        [
+          { _id: projectionId('n1'), _rev: '1-aaaa', rev: '3-k', ...(first ? { etag: first } : {}), target: HERE },
+          { _id: projectionId('n1'), _rev: '1-zzzz', rev: '3-k', ...(second ? { etag: second } : {}), target: HERE },
+        ],
+        { new_edits: false },
+      )
+      const kept = await readProjection(db, 'n1')
+      expect(kept).toMatchObject({ rev: '3-k', target: HERE })
+      expect(kept).not.toHaveProperty('etag')
+      const stored = await db.get(projectionId('n1'), { conflicts: true })
+      expect(stored).not.toHaveProperty('etag')
+      expect(stored._conflicts).toBeUndefined()
+    }
+  })
+
+  it('of conflicting records that agree on the revision and ETag, keeps the ETag', async () => {
+    const db = memoryDb()
+    await db.bulkDocs(
+      [
+        { _id: projectionId('n1'), _rev: '1-aaaa', rev: '3-k', etag: '"a"', target: HERE },
+        { _id: projectionId('n1'), _rev: '1-zzzz', rev: '3-k', etag: '"a"', target: HERE },
+        // Same revision, written to another container: its ETag is that pod's.
+        { _id: projectionId('n2'), _rev: '1-aaaa', rev: '3-k', etag: '"ruth"', target: HERE },
+        { _id: projectionId('n2'), _rev: '1-zzzz', rev: '3-k', etag: '"nk"', target: THERE },
+      ],
+      { new_edits: false },
+    )
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev: '3-k', etag: '"a"', target: HERE })
+    // PouchDB's winner (1-zzzz) is kept whole.
+    expect(await readProjection(db, 'n2')).toMatchObject({ rev: '3-k', etag: '"nk"', target: THERE })
+  })
+
   it('a dropped record remembers which container’s copy was deleted', async () => {
     const db = memoryDb()
     expect(await droppedElsewhere(db, 'never', HERE)).toBe(false)

@@ -185,6 +185,30 @@ describe('importContainer', () => {
     expect(ev.named('outside-change')).toEqual([])
   })
 
+  // A record with no ETag (two devices projected one revision, see
+  // readProjection) can't tell an outside change from its own write: the next
+  // write goes unconditionally. The import adopts a copy that matches.
+  it('never reports a node whose record has no ETag, and adopts its copy when it matches', async () => {
+    const { db, client, ev, pod, containerUrl } = await setup([
+      { '@id': 'edited', title: 'First' },
+      { '@id': 'same', title: 'First' },
+    ])
+    const first = await db.put({ _id: 'edited', '@id': 'edited', title: 'First' })
+    await writeProjection(db, 'edited', { rev: first.rev, target: containerUrl })
+    await db.put({ _id: 'edited', _rev: first.rev, '@id': 'edited', title: 'Unprojected edit' })
+    const same = await db.put({ _id: 'same', '@id': 'same', title: 'First' })
+    await writeProjection(db, 'same', { rev: same.rev, target: containerUrl })
+    const suspects = []
+    await importContainer({ db, pod: client, containerUrl, context: ctx, emit: ev.emit, outside: (id) => suspects.push(id) })
+    await recheckOutside({ db, pod: client, containerUrl, context: ctx, ids: ['edited', 'same'], emit: ev.emit })
+    expect(suspects).toEqual([])
+    expect(ev.named('outside-change')).toEqual([])
+    expect(await readProjection(db, 'edited')).not.toHaveProperty('etag')
+    expect(await readProjection(db, 'same')).toMatchObject({
+      rev: same.rev, etag: pod.files.get(nodeUrl(containerUrl, 'same')).etag,
+    })
+  })
+
   it('doesn’t adopt over a record naming a deeper revision this device hasn’t seen', async () => {
     const { db, client, ev, containerUrl } = await setup([{ '@id': 'a', title: 'Same' }])
     await db.put({ _id: 'a', '@id': 'a', title: 'Same' })
