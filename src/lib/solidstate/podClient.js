@@ -190,13 +190,21 @@ export const createPodClient = (rawFetch, { timeoutMs = 30000 } = {}) => {
   }
 
   // Create every container between rootUrl and containerUrl that doesn't
-  // exist. Some servers (brolly) don't create parents on PUT.
+  // exist. Some servers (brolly) don't create parents on PUT. A folder above
+  // the container that answers 401 or 403 exists but isn't ours to see: an
+  // editor of someone else's site may reach the site's own container and
+  // nothing above it. Some servers hide such a folder behind a 404, then
+  // refuse the PUT with 401 or 403; that counts too. The container itself
+  // must answer.
   const ensurePath = async (rootUrl, containerUrl) => {
+    const segments = containerUrl.slice(rootUrl.length).split('/').filter(Boolean)
     let url = rootUrl
-    for (const segment of containerUrl.slice(rootUrl.length).split('/').filter(Boolean)) {
+    for (const [i, segment] of segments.entries()) {
       url += `${segment}/`
+      const parent = i < segments.length - 1
+      const refused = (res) => parent && (res.status === 401 || res.status === 403)
       const head = await fetch(url, { method: 'HEAD' })
-      if (head.ok) {
+      if (head.ok || refused(head)) {
         drain(head)
         continue
       }
@@ -206,7 +214,7 @@ export const createPodClient = (rawFetch, { timeoutMs = 30000 } = {}) => {
       // A 409 is accepted as "exists or being created". Some servers (NSS)
       // answer 409 for a PUT to a container URL, in which case a later PUT
       // will fail with that server's own error.
-      if (!res.ok && res.status !== 409) throw await fail('PUT', url, res)
+      if (!res.ok && res.status !== 409 && !refused(res)) throw await fail('PUT', url, res)
       drain(res)
     }
   }

@@ -78,6 +78,45 @@ describe('pod client', () => {
     expect(pod.files.has(`${pod.storage}a/b/c/`)).toBe(true)
   })
 
+  it('goes past a folder above the container that answers 401 or 403', async () => {
+    for (const status of [401, 403]) {
+      const { pod, client } = setup({ autoCreateParents: false })
+      await client.ensurePath(pod.storage, `${pod.storage}a/b/`)
+      pod.forbid(`${pod.storage}a/`, status)
+      await client.ensurePath(pod.storage, `${pod.storage}a/b/c/`)
+      expect(pod.files.has(`${pod.storage}a/b/c/`)).toBe(true)
+    }
+  })
+
+  it('still fails when the container itself answers 401 or 403', async () => {
+    for (const status of [401, 403]) {
+      const { pod, client } = setup()
+      await client.ensurePath(pod.storage, `${pod.storage}a/b/`)
+      pod.forbid(`${pod.storage}a/b/`, status)
+      await expect(client.ensurePath(pod.storage, `${pod.storage}a/b/`)).rejects.toMatchObject({ status })
+    }
+  })
+
+  // Some servers answer 404 for a folder the agent may not see, then refuse
+  // the PUT that would create it.
+  it('goes past a folder above the container that hides behind a 404 and refuses its PUT', async () => {
+    for (const status of [401, 403]) {
+      const pod = createFakePod({ autoCreateParents: false })
+      const hidden = `${pod.storage}a/`
+      await pod.fetch(hidden, { method: 'PUT', body: '' })
+      await pod.fetch(`${hidden}b/`, { method: 'PUT', body: '' })
+      const fetch = (url, init = {}) =>
+        url === hidden
+          ? Promise.resolve(new Response(null, { status: init.method === 'PUT' ? status : 404 }))
+          : pod.fetch(url, init)
+      const client = createPodClient(fetch)
+      await client.ensurePath(pod.storage, `${hidden}b/c/`)
+      expect(pod.files.has(`${hidden}b/c/`)).toBe(true)
+      // The container itself still decides: refused, it fails start-up.
+      await expect(client.ensurePath(pod.storage, hidden)).rejects.toMatchObject({ status })
+    }
+  })
+
   it('throws PodError with retryable set for 5xx', async () => {
     const { pod, client } = setup()
     pod.failNext('PUT', 503)
