@@ -1,7 +1,9 @@
 import { nodeToNQuads, nquadsToNode, sameGraph } from './rdf.js'
 import { nodeUrl } from './layout.js'
 import { isInternal, isProjectable, generation, revList } from './internal.js'
-import { readProjection, writeProjection, dropProjection, listProjections } from './projections.js'
+import {
+  readProjection, writeProjection, dropProjection, listProjections, forAnotherTarget, droppedElsewhere,
+} from './projections.js'
 import { resolveIfIdentical } from './conflicts.js'
 
 const MAX_DELAY = 5 * 60 * 1000
@@ -11,6 +13,13 @@ const MAX_DELAY = 5 * 60 * 1000
 // time the node is looked at, so listeners must tolerate repeats. Runs one projection at a time, each against the
 // doc's state when it runs, so a burst of edits ends in one PUT of the latest
 // revision (later queued runs find it already current).
+//
+// Each projection record names the container it was written to. A record for
+// another container (the store moved to another pod, or another device still
+// projects into the old one) counts as none: the node is written here, or
+// deleted here, without preconditions. Records from before 0.6 name none and
+// count as `untargeted`'s (projections.js). A record dropped elsewhere means a
+// copy here is left over, and it's deleted.
 //
 // 401/403 are permanent as far as the pod client is concerned (PodError marks
 // only 5xx/429 retryable). P3 handles session refresh and calls projectAll()
@@ -24,7 +33,7 @@ const MAX_DELAY = 5 * 60 * 1000
 // Retry-After pauses both.
 export const createProjector = ({
   db, pod, containerUrl, context, emit = () => {}, retryBaseMs = 1000,
-  podOnly = false, pullNode = async () => {}, gate = { pausedUntil: 0 },
+  podOnly = false, pullNode = async () => {}, gate = { pausedUntil: 0 }, untargeted = containerUrl,
 }) => {
   // A throwing listener must not break the projection chain.
   const safeEmit = (name, detail) => {
@@ -64,12 +73,33 @@ export const createProjector = ({
       safeEmit('conflicted', { id })
       return 'conflicted'
     }
-    const projection = await readProjection(db, id)
+    const record = await readProjection(db, id)
+    // A record for another container says nothing about this one: the node
+    // counts as never projected here. Whatever this container holds under its
+    // name is an earlier copy of it, not someone else's change, so it's
+    // written (or deleted) without preconditions.
+    const elsewhere = forAnotherTarget(record, containerUrl, untargeted)
+    const projection = elsewhere ? null : record
     const url = nodeUrl(containerUrl, id)
+    // Every record written here names this container. One that named another
+    // forgets what it knew about that pod: its copy (`base`, which pod-only
+    // writes set again) and its listing time.
+    const here = elsewhere
+      ? { target: containerUrl, base: null, listed: null, listedSettled: null }
+      : { target: containerUrl }
 
     if (doc._deleted) {
-      if (!projection) return 'unchanged'
-      const result = await pod.remove(url, { etag: projection.etag })
+      if (!record) {
+        // A device projecting into another container deleted its copy and
+        // dropped the record; the copy here is left over.
+        if (!(await droppedElsewhere(db, id, containerUrl, untargeted))) return 'unchanged'
+        await pod.remove(url)
+        safeEmit('projected', { id, deleted: true })
+        return 'deleted'
+      }
+      // With a record from elsewhere there's no ETag of ours, so this is
+      // unconditional. A 404 is success.
+      const result = await pod.remove(url, { etag: projection?.etag })
       if (result.conflict) {
         if (podOnly) {
           await pullNode(id)
@@ -78,7 +108,7 @@ export const createProjector = ({
         safeEmit('outside-change', { id, url })
         return 'outside-change'
       }
-      await dropProjection(db, id)
+      await dropProjection(db, id, { target: containerUrl })
       safeEmit('projected', { id, deleted: true })
       return 'deleted'
     }
@@ -89,11 +119,13 @@ export const createProjector = ({
     // deeper branch that ended in a delete loses to any live one, so a record
     // naming a revision this device already has on some branch (live or
     // deleted) is out of date, not ahead, and the winner is projected over it.
+    // This holds whichever container the record names: waiting for the newer
+    // doc never rolls this container back either.
     if (
-      projection &&
-      projection.rev !== doc._rev &&
-      generation(projection.rev) >= generation(doc._rev) &&
-      !(await seen(id, projection.rev))
+      record &&
+      record.rev !== doc._rev &&
+      generation(record.rev) >= generation(doc._rev) &&
+      !(await seen(id, record.rev))
     ) {
       return 'behind'
     }
@@ -117,9 +149,10 @@ export const createProjector = ({
         return 'pulled'
       }
     }
-    // No projection record means this device never wrote the node: create it
-    // (If-None-Match: *). Otherwise update against the recorded ETag.
-    let result = await pod.put(url, body, { etag: projection?.etag, create: !projection })
+    // No record here means this device never wrote the node here: create it
+    // (If-None-Match: *), or overwrite an earlier copy if the record is from
+    // elsewhere. Otherwise update against the recorded ETag.
+    let result = await pod.put(url, body, { etag: projection?.etag, create: !projection, overwrite: elsewhere })
     if (result.conflict && podOnly) {
       const remote = await pod.get(url)
       if (!remote || !(await sameGraph(remote.body, body))) {
@@ -135,7 +168,7 @@ export const createProjector = ({
       // Gone, with the record changed or dropped since we read it: another
       // device deleted the resource (and replication just brought its record),
       // not an outside app. Project again with the fresh record.
-      if (!remote && (await readProjection(db, id))?._rev !== projection?._rev) {
+      if (!remote && (await readProjection(db, id))?._rev !== record?._rev) {
         enqueue(id)
         return 'requeued'
       }
@@ -147,11 +180,11 @@ export const createProjector = ({
     }
     // Read back after a write that carried no ETag: if it isn't what we
     // wrote, another write landed in between, and its ETag isn't ours to
-    // record. Keep the record as it was, minus the ETag, and pull: that
-    // merges the other write with ours.
+    // record. Keep the record as it was (now this container's), minus the
+    // ETag, and pull: that merges the other write with ours.
     if (result.body !== undefined && !(await sameGraph(result.body, body))) {
       if (podOnly) {
-        await writeProjection(db, id, { rev: projection?.rev ?? '0-none', etag: null })
+        await writeProjection(db, id, { rev: projection?.rev ?? '0-none', etag: null, ...here })
         await pullNode(id)
         return 'pulled'
       }
@@ -159,7 +192,7 @@ export const createProjector = ({
       return 'outside-change'
     }
     const base = podOnly ? await nquadsToNode(body, context, id) : undefined
-    await writeProjection(db, id, { rev: doc._rev, etag: result.etag, ...(base ? { base } : {}) })
+    await writeProjection(db, id, { rev: doc._rev, etag: result.etag, ...here, ...(base ? { base } : {}) })
     safeEmit('projected', { id })
     return 'projected'
   }

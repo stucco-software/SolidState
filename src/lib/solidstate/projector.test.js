@@ -3,33 +3,37 @@ import { memoryDb, events } from './test/helpers.js'
 import { createFakePod } from './test/fake-pod.js'
 import { createPodClient } from './podClient.js'
 import { createProjector } from './projector.js'
-import { readProjection, writeProjection, dropProjection } from './projections.js'
+import { readProjection, writeProjection, dropProjection, droppedElsewhere } from './projections.js'
+import { conflicts, resolve } from './conflicts.js'
 import { nodeUrl } from './layout.js'
 import { projectionId } from './internal.js'
 import { nodeToNQuads } from './rdf.js'
 
 const ctx = { '@base': 'https://e.x/v/', '@vocab': '#' }
 
-const setup = () => {
+const setup = (options = {}) => {
   const pod = createFakePod()
   const db = memoryDb()
   const ev = events()
   const containerUrl = `${pod.storage}data/site/`
   const projector = createProjector({
-    db, pod: createPodClient(pod.fetch), containerUrl, context: ctx, emit: ev.emit, retryBaseMs: 5,
+    db, pod: createPodClient(pod.fetch), containerUrl, context: ctx, emit: ev.emit, retryBaseMs: 5, ...options,
   })
   const url = (id) => nodeUrl(containerUrl, id)
-  return { pod, db, ev, projector, url }
+  return { pod, db, ev, projector, url, containerUrl }
 }
+
+// The container the store projected into before it moved.
+const OLD = 'https://old.test/data/site/'
 
 describe('projector', () => {
   it('projects a new doc with If-None-Match and records rev and etag', async () => {
-    const { pod, db, projector, url } = setup()
+    const { pod, db, projector, url, containerUrl } = setup()
     const { rev } = await db.put({ _id: 'n1', '@id': 'n1', title: 'Hello' })
     await projector.projectAll()
     expect(pod.files.get(url('n1')).body).toContain('"Hello"')
     expect(pod.requests('PUT', 'n1')[0].headers['if-none-match']).toBe('*')
-    expect(await readProjection(db, 'n1')).toMatchObject({ rev, etag: pod.files.get(url('n1')).etag })
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev, etag: pod.files.get(url('n1')).etag, target: containerUrl })
   })
 
   it('does nothing when the revision was already projected', async () => {
@@ -303,5 +307,153 @@ describe('projector', () => {
     await projector.projectAll()
     expect(pod.files.get(url('n1')).body).toContain('"B edit"')
     expect(await readProjection(db, 'n1')).toMatchObject({ rev: '2-bbbb' })
+  })
+})
+
+describe('projector with records for another container', () => {
+  it('takes a record without a target (from before 0.6) to be for this container', async () => {
+    const { pod, db, projector, url, containerUrl } = setup()
+    const first = await db.put({ _id: 'n1', '@id': 'n1', title: 'A' })
+    await pod.fetch(url('n1'), { method: 'PUT', body: await nodeToNQuads({ '@id': 'n1', title: 'A' }, ctx) })
+    const etag = pod.files.get(url('n1')).etag
+    await writeProjection(db, 'n1', { rev: first.rev, etag })
+    await projector.projectAll()
+    // Only the PUT above: upgrading re-projects nothing.
+    expect(pod.requests('PUT', 'n1')).toHaveLength(1)
+    await db.put({ _id: 'n1', _rev: first.rev, '@id': 'n1', title: 'B' })
+    await projector.projectAll()
+    expect(pod.requests('PUT', 'n1').at(-1).headers['if-match']).toBe(etag)
+    expect((await readProjection(db, 'n1')).target).toBe(containerUrl)
+  })
+
+  it('takes a record without a target to be for `untargeted`, once the store has moved from there', async () => {
+    const { pod, db, ev, projector, url, containerUrl } = setup({ untargeted: OLD })
+    const { rev } = await db.put({ _id: 'n1', '@id': 'n1', title: 'A' })
+    await writeProjection(db, 'n1', { rev, etag: '"in-the-old-pod"' })
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toContain('"A"')
+    expect(pod.requests('PUT', 'n1').at(-1).headers['if-match']).toBeUndefined()
+    expect(await readProjection(db, 'n1')).toMatchObject({ rev, target: containerUrl })
+    expect(ev.named('outside-change')).toEqual([])
+  })
+
+  it('writes a node again, unconditionally, when its record is for another container', async () => {
+    const { pod, db, ev, projector, url, containerUrl } = setup()
+    for (const id of ['n1', 'n2']) {
+      const { rev } = await db.put({ _id: id, '@id': id, title: id })
+      await writeProjection(db, id, { rev, etag: '"in-the-old-pod"', target: OLD })
+    }
+    // An earlier, interrupted move left a different copy of n2 here.
+    await pod.fetch(url('n2'), { method: 'PUT', body: 'an earlier copy' })
+    await projector.projectAll()
+    for (const id of ['n1', 'n2']) {
+      expect(pod.files.get(url(id)).body).toContain(`"${id}"`)
+      const { headers } = pod.requests('PUT', id).at(-1)
+      expect(headers['if-match']).toBeUndefined()
+      expect(headers['if-none-match']).toBeUndefined()
+      expect(await readProjection(db, id)).toMatchObject({ target: containerUrl, etag: pod.files.get(url(id)).etag })
+    }
+    expect(ev.named('outside-change')).toEqual([])
+  })
+
+  it('updates conditionally again once the node is written here', async () => {
+    const { pod, db, ev, projector, url } = setup()
+    const first = await db.put({ _id: 'n1', '@id': 'n1', title: 'A' })
+    await writeProjection(db, 'n1', { rev: first.rev, etag: '"in-the-old-pod"', target: OLD })
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toContain('"A"')
+    pod.touch(url('n1'), 'edited by another app')
+    await db.put({ _id: 'n1', _rev: first.rev, '@id': 'n1', title: 'B' })
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toBe('edited by another app')
+    expect(ev.named('outside-change')).toEqual([{ name: 'outside-change', id: 'n1', url: url('n1') }])
+  })
+
+  it('deletes a node unconditionally when its record is for another container', async () => {
+    const { pod, db, ev, projector, url } = setup()
+    for (const id of ['here', 'absent']) {
+      const { rev } = await db.put({ _id: id, '@id': id, title: id })
+      await writeProjection(db, id, { rev, etag: '"in-the-old-pod"', target: OLD })
+      await db.remove(id, rev)
+    }
+    await pod.fetch(url('here'), { method: 'PUT', body: 'a copy here' })
+    await projector.projectAll()
+    expect(pod.files.has(url('here'))).toBe(false)
+    expect(pod.requests('DELETE', 'here')[0].headers['if-match']).toBeUndefined()
+    // Nothing to delete is fine too (a 404).
+    expect(pod.requests('DELETE', 'absent')).toHaveLength(1)
+    for (const id of ['here', 'absent']) {
+      expect(await readProjection(db, id)).toBeNull()
+      // A device still projecting into the old container deletes its copy too.
+      expect(await droppedElsewhere(db, id, OLD)).toBe(true)
+    }
+    expect(ev.named('outside-change')).toEqual([])
+  })
+
+  it('deletes its copy when a device on another container dropped the record', async () => {
+    const { pod, db, projector, url, containerUrl } = setup()
+    const dropped = async (id, target) => {
+      await pod.fetch(url(id), { method: 'PUT', body: `a copy of ${id}` })
+      await writeProjection(db, id, { rev: '1-a', etag: '"e"', target })
+      await dropProjection(db, id, { target })
+    }
+    await dropped('theirs', OLD)
+    await dropped('ours', containerUrl)
+    await dropped('from05', undefined)
+    expect(await projector.projectDoc({ _id: 'theirs', _deleted: true })).toBe('deleted')
+    expect(pod.files.has(url('theirs'))).toBe(false)
+    // Dropped here (or before 0.6, here too): the device that dropped it deleted this copy.
+    expect(await projector.projectDoc({ _id: 'ours', _deleted: true })).toBe('unchanged')
+    expect(await projector.projectDoc({ _id: 'from05', _deleted: true })).toBe('unchanged')
+    expect(pod.requests('DELETE')).toHaveLength(1)
+  })
+
+  it('waits for a newer revision projected into another container, then writes it here', async () => {
+    const { pod, db, projector, url } = setup()
+    const first = await db.put({ _id: 'n1', '@id': 'n1', title: 'Old' })
+    await writeProjection(db, 'n1', { rev: '2-ffff', etag: '"in-the-old-pod"', target: OLD })
+    expect(await projector.projectDoc(await db.get('n1', { conflicts: true }))).toBe('behind')
+    expect(pod.requests('PUT')).toHaveLength(0)
+    // The newer revision arrives by replication.
+    await db.bulkDocs(
+      [{ _id: 'n1', _rev: '2-ffff', _revisions: { start: 2, ids: ['ffff', first.rev.split('-')[1]] }, '@id': 'n1', title: 'New' }],
+      { new_edits: false },
+    )
+    expect(await projector.projectDoc(await db.get('n1', { conflicts: true }))).toBe('projected')
+    expect(pod.files.get(url('n1')).body).toContain('"New"')
+    expect(pod.requests('PUT', 'n1')[0].headers['if-none-match']).toBeUndefined()
+  })
+
+  it('holds a conflicted node back wherever its record points, then writes it once resolved', async () => {
+    const { pod, db, ev, projector, url } = setup()
+    const { rev } = await db.put({ _id: 'n1', '@id': 'n1', title: 'A' })
+    await db.bulkDocs([{ _id: 'n1', _rev: '1-zzzz', '@id': 'n1', title: 'B' }], { new_edits: false })
+    await writeProjection(db, 'n1', { rev, etag: '"in-the-old-pod"', target: OLD })
+    await projector.projectAll()
+    expect(pod.requests('PUT')).toHaveLength(0)
+    expect(ev.named('conflicted')).toHaveLength(1)
+    await resolve(db, 'n1', { '@id': 'n1', title: 'Merged' }, await conflicts(db, 'n1'))
+    await projector.projectAll()
+    expect(pod.files.get(url('n1')).body).toContain('"Merged"')
+    expect(ev.named('outside-change')).toEqual([])
+  })
+
+  it('without a sync server, writes a record from elsewhere without pulling, and forgets the old pod', async () => {
+    const pulls = []
+    const { pod, db, ev, projector, url, containerUrl } = setup({ podOnly: true, pullNode: async (id) => { pulls.push(id) } })
+    const { rev } = await db.put({ _id: 'n1', '@id': 'n1', title: 'A' })
+    await writeProjection(db, 'n1', {
+      rev, etag: '"in-the-old-pod"', target: OLD, base: { '@id': 'n1', title: 'Old' }, listed: 1000, listedSettled: true,
+    })
+    await pod.fetch(url('n1'), { method: 'PUT', body: await nodeToNQuads({ '@id': 'n1', title: 'An earlier copy' }, ctx) })
+    await projector.projectAll()
+    expect(pulls).toEqual([])
+    expect(pod.files.get(url('n1')).body).toContain('"A"')
+    expect(pod.requests('PUT', 'n1').at(-1).headers['if-match']).toBeUndefined()
+    const record = await readProjection(db, 'n1')
+    expect(record).toMatchObject({ rev, target: containerUrl, base: expect.objectContaining({ title: 'A' }) })
+    expect(record).not.toHaveProperty('listed')
+    expect(record).not.toHaveProperty('listedSettled')
+    expect(ev.named('outside-change')).toEqual([])
   })
 })
